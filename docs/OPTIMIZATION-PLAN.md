@@ -196,7 +196,7 @@
 
 - tools.js：remote_connect 补 `passphrase` 参数（修 B3）、auth 枚举更新、输出统一走错误分类；remote_status 输出加 lastError；remote_exec 增加默认 60s、上限 10min 约束说明。
 - 代码整理：index.js 的 RPC 注册去重（harness.handle 与 HTTP 桥共用一张 method 表）；删除 `client.js.dynamic.bak`、`package.json.bak`。
-- package.json：version 0.2.0、repository/bugs/homepage 补齐（`https://github.com/tsja2001/deepSeek-harness-remote-ssh`）、engines.node>=18、description 去掉 agent 表述。
+- package.json：version 0.2.0、repository/bugs/homepage 补齐（`https://github.com/tsja2001/dsh-remote-ssh`）、engines.node>=18、description 去掉 agent 表述。
 - 文档：README.md / README.zh.md 重写（新表单截图位、认证说明、**安全模型一节**：TOFU、CSRF 防护、凭据存储模式、明文回退的风险）、CHANGELOG.md（0.2.0 条目）、CONTRIBUTING.md（开发/测试如何跑）、docs/HANDOVER.md 增补 v0.2 记录。
 - 测试（scripts/，node 原生 assert 风格保持一致）：
   - test-manager.js：迁移（agent→key）、空白密码保留、port 归一化、tilde 展开、错误分类映射、browse 自动连接与条目结构、browseClose。

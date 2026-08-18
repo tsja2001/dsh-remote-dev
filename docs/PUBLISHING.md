@@ -7,7 +7,7 @@
 当前配置使用以下公开身份：
 
 - npm：`@dsh-remote/remote-ssh`
-- GitHub：`tsja2001/deepSeek-harness-remote-ssh`
+- GitHub：`tsja2001/dsh-remote-ssh`
 - 默认分支：`main`
 
 首次发布前必须确认你拥有 npm 的 `dsh-remote` scope，并创建同名 GitHub 仓库。npm trusted publishing 要求 `package.json` 中的 `repository.url` 与实际 GitHub 仓库完全一致；如果最终使用个人账号或其他组织，请先全局替换这些地址和 scope。
@@ -111,7 +111,7 @@ dsh plugin --profile web add @dsh-remote/remote-ssh
 首次包创建成功后，在 npm 包设置中添加 GitHub Actions trusted publisher：
 
 - Organization or user：`tsja2001`
-- Repository：`deepSeek-harness-remote-ssh`
+- Repository：`dsh-remote-ssh`
 - Workflow：`publish.yml`
 - Environment：`npm`
 

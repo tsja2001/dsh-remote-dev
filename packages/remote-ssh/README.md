@@ -8,18 +8,18 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm version" src="https://img.shields.io/npm/v/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
   <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://github.com/tsja2001/deepSeek-harness-remote-ssh/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
+  <a href="https://github.com/tsja2001/dsh-remote-ssh/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="Node.js 18 or newer" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white">
 </p>
 
 <p align="center">
-  English · <a href="https://github.com/tsja2001/deepSeek-harness-remote-ssh/blob/main/README.zh.md">简体中文</a> ·
-  <a href="https://github.com/tsja2001/deepSeek-harness-remote-ssh">GitHub</a> ·
-  <a href="https://github.com/tsja2001/deepSeek-harness-remote-ssh/blob/main/CHANGELOG.md">Changelog</a>
+  English · <a href="https://github.com/tsja2001/dsh-remote-ssh/blob/main/README.zh.md">简体中文</a> ·
+  <a href="https://github.com/tsja2001/dsh-remote-ssh">GitHub</a> ·
+  <a href="https://github.com/tsja2001/dsh-remote-ssh/blob/main/CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tsja2001/deepSeek-harness-remote-ssh/main/docs/images/remote-connections.png" alt="DeepSeek Harness Remote SSH settings UI" width="100%">
+  <img src="https://raw.githubusercontent.com/tsja2001/dsh-remote-ssh/main/docs/images/remote-connections.png" alt="DeepSeek Harness Remote SSH settings UI" width="100%">
 </p>
 
 ## Install
@@ -81,10 +81,10 @@ The bundle automatically contributes tool guidance to the DeepSeek Harness syste
 
 ## Documentation
 
-The [GitHub repository](https://github.com/tsja2001/deepSeek-harness-remote-ssh) contains the complete quick start, Windows guidance, security model, Docker test environment, architecture, publishing guide, and contribution instructions.
+The [GitHub repository](https://github.com/tsja2001/dsh-remote-ssh) contains the complete quick start, Windows guidance, security model, Docker test environment, architecture, publishing guide, and contribution instructions.
 
 This is a community-maintained plugin and is not an official DeepSeek AI product.
 
 ## License
 
-[MIT](https://github.com/tsja2001/deepSeek-harness-remote-ssh/blob/main/LICENSE) © 2026 dsh-remote contributors
+[MIT](https://github.com/tsja2001/dsh-remote-ssh/blob/main/LICENSE) © 2026 dsh-remote contributors

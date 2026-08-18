@@ -50,14 +50,14 @@
     "linux",
     "windows"
   ],
-  "homepage": "https://github.com/tsja2001/deepSeek-harness-remote-ssh#readme",
+  "homepage": "https://github.com/tsja2001/dsh-remote-ssh#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tsja2001/deepSeek-harness-remote-ssh.git",
+    "url": "git+https://github.com/tsja2001/dsh-remote-ssh.git",
     "directory": "packages/remote-ssh"
   },
   "bugs": {
-    "url": "https://github.com/tsja2001/deepSeek-harness-remote-ssh/issues"
+    "url": "https://github.com/tsja2001/dsh-remote-ssh/issues"
   },
   "publishConfig": {
     "access": "public",

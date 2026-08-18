@@ -5,8 +5,8 @@
 ## 开发环境 / Setup
 
 ```sh
-git clone https://github.com/tsja2001/deepSeek-harness-remote-ssh.git
-cd deepSeek-harness-remote-ssh
+git clone https://github.com/tsja2001/dsh-remote-ssh.git
+cd dsh-remote-ssh
 npm install
 ```
 
