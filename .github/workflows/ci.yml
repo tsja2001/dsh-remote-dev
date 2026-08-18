@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Start disposable SSH server
+        run: |
+          ssh-keygen -q -t ed25519 -N '' -f /tmp/dsh-ci-key
+          docker run -d --name dsh-sshd-test -p 2222:2222 \
+            -e PUID=1000 -e PGID=1000 -e TZ=UTC -e SUDO_ACCESS=true \
+            -e USER_NAME=dev -e USER_PASSWORD=test1234 -e PASSWORD_ACCESS=true \
+            -e "PUBLIC_KEY=$(cat /tmp/dsh-ci-key.pub)" \
+            linuxserver/openssh-server
+          for i in $(seq 1 20); do
+            if nc -z 127.0.0.1 2222 2>/dev/null; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "sshd not ready after 60 seconds"
+          exit 1
+
+      - run: npm test
+        env:
+          DSH_TEST_KEY: /tmp/dsh-ci-key
+
+      - run: npm run package:check
+
+      - name: Remove disposable SSH server
+        if: always()
+        run: docker rm -f dsh-sshd-test 2>/dev/null || true
