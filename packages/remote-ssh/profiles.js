@@ -17,7 +17,7 @@
  * remain in this file — see index.js. In minimal compositions the file keeps
  * secrets itself (0600, documented).
  *
- * @module @dsh-remote/remote-ssh/profiles
+ * @module @tsja/dsh-remote-ssh/profiles
  */
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

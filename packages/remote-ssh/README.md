@@ -1,4 +1,4 @@
-<h1 align="center">@dsh-remote/remote-ssh</h1>
+<h1 align="center">@tsja/dsh-remote-ssh</h1>
 
 <p align="center">
   <strong>AI-native SSH remote development for DeepSeek Harness.</strong><br>
@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm version" src="https://img.shields.io/npm/v/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm version" src="https://img.shields.io/npm/v/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
   <a href="https://github.com/tsja2001/dsh-remote-ssh/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="Node.js 18 or newer" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white">
 </p>
@@ -27,7 +27,7 @@
 This is a [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) bundle. Install it through the `dsh` plugin manager:
 
 ~~~sh
-dsh plugin --profile web add @dsh-remote/remote-ssh
+dsh plugin --profile web add @tsja/dsh-remote-ssh
 dsh --profile web
 ~~~
 

@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm 版本" src="https://img.shields.io/npm/v/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm 下载量" src="https://img.shields.io/npm/dm/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm 版本" src="https://img.shields.io/npm/v/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm 下载量" src="https://img.shields.io/npm/dm/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
   <a href="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml"><img alt="CI 状态" src="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <a href="packages/remote-ssh/package.json"><img alt="Node.js 18 或更新版本" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white"></a>
@@ -55,7 +55,7 @@ DeepSeek Harness Remote SSH 是一款开源的 **[DeepSeek Harness](https://gith
 ### 1. 安装插件
 
 ~~~sh
-dsh plugin --profile web add @dsh-remote/remote-ssh
+dsh plugin --profile web add @tsja/dsh-remote-ssh
 dsh --profile web
 ~~~
 
@@ -158,6 +158,8 @@ npm ci
 npm test
 npm run package:check
 ~~~
+
+本仓库是由 `package-lock.json` 管理的 npm workspace。DeepSeek Harness 主仓库可以继续使用 pnpm，但不要在这个插件仓库内运行 `pnpm install`。
 
 把本地代码安装进 Web profile：
 

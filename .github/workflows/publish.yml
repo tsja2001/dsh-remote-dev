@@ -46,12 +46,12 @@ jobs:
             -e "PUBLIC_KEY=$(cat /tmp/dsh-ci-key.pub)" \
             linuxserver/openssh-server
           for i in $(seq 1 20); do
-            if nc -z 127.0.0.1 2222 2>/dev/null; then
+            if ssh-keyscan -T 2 -p 2222 127.0.0.1 >/dev/null 2>&1; then
               exit 0
             fi
             sleep 3
           done
-          echo "sshd not ready after 60 seconds"
+          echo "sshd handshake not ready after 60 seconds"
           exit 1
 
       - name: Test and inspect package

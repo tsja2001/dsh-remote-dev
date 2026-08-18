@@ -1,6 +1,6 @@
-# The @dsh-remote/remote-ssh bundle layer: inserts the remote plugin row.
-# Installed with:  dsh plugin --profile <name> add @dsh-remote/remote-ssh
+# The @tsja/dsh-remote-ssh bundle layer: inserts the remote plugin row.
+# Installed with:  dsh plugin --profile <name> add @tsja/dsh-remote-ssh
 # The browser UI is discovered through the package's dsh.client declaration.
 - insert:
     - id: remote-ssh
-      name: '@dsh-remote/remote-ssh'
+      name: '@tsja/dsh-remote-ssh'

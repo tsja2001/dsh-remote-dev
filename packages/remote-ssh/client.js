@@ -18,11 +18,11 @@
  * schemes render correctly; copy is bilingual (zh/en) and follows the
  * shell locale when the service is present.
  *
- * @module @dsh-remote/remote-ssh/client
+ * @module @tsja/dsh-remote-ssh/client
  */
 
 window.__ModuleLoader__.load({
-	id: '@dsh-remote/remote-ssh',
+	id: '@tsja/dsh-remote-ssh',
 	factory: (require) => {
 		const React = require('react')
 		const { useState, useEffect, useRef, useCallback } = React
@@ -1028,7 +1028,9 @@ window.__ModuleLoader__.load({
 				const connected = profiles.filter((p) => p.status === 'connected')
 
 				return h('div', { className: 'dsh-remote-page' },
-					h('h2', null, t('title')),
+					h('h2', null, t('title'), ' ',
+						h('span', { className: 'dsh-remote-badge', title: 'client build' }, 'v0.3'),
+					),
 					h('p', { className: 'dsh-remote-intro' },
 						t('intro'), ' ',
 						storageMode ? h('span', { className: 'dsh-remote-storage' },

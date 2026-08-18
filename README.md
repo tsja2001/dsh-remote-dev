@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm version" src="https://img.shields.io/npm/v/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://www.npmjs.com/package/@dsh-remote/remote-ssh"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40dsh-remote%2Fremote-ssh?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm version" src="https://img.shields.io/npm/v/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
   <a href="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <a href="packages/remote-ssh/package.json"><img alt="Node.js 18 or newer" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white"></a>
@@ -55,7 +55,7 @@ Your model stays inside DeepSeek Harness. Your source code, build environment, G
 ### 1. Install the plugin
 
 ~~~sh
-dsh plugin --profile web add @dsh-remote/remote-ssh
+dsh plugin --profile web add @tsja/dsh-remote-ssh
 dsh --profile web
 ~~~
 
@@ -158,6 +158,10 @@ npm ci
 npm test
 npm run package:check
 ~~~
+
+This repository is an npm workspace and its dependency state is owned by
+`package-lock.json`. The DeepSeek Harness checkout can continue to use pnpm,
+but do not run `pnpm install` inside this plugin checkout.
 
 Install the checkout into a local Web profile:
 

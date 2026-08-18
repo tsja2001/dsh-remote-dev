@@ -4,7 +4,7 @@
  * Registered on the `tools` service; the plugin also adds a systemPrompt
  * section so the model knows the remote tool family exists.
  *
- * @module @dsh-remote/remote-ssh/tools
+ * @module @tsja/dsh-remote-ssh/tools
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'

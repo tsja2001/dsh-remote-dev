@@ -4,17 +4,17 @@
   "version": "0.2.0",
   "description": "Development and release workspace for the DeepSeek Harness Remote SSH plugin.",
   "type": "module",
+  "packageManager": "npm@10.9.8",
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "test": "node scripts/test-ssh2.js && node scripts/test-manager.js",
     "check": "npm --prefix packages/remote-ssh run check",
-    "package:check": "npm --prefix packages/remote-ssh run pack:check",
+    "package:check": "node scripts/check-package.js",
     "release:check": "npm test && npm run package:check"
-  },
-  "devDependencies": {
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
-    "ssh2": "^1.17.0"
   }
 }

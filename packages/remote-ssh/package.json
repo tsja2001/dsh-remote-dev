@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-remote/remote-ssh",
+  "name": "@tsja/dsh-remote-ssh",
   "version": "0.3.0",
   "description": "DeepSeek Harness SSH plugin for AI remote development: run commands and read, write, or browse files on Linux and Windows servers.",
   "type": "module",
@@ -30,6 +30,7 @@
     "prepack": "npm run check"
   },
   "license": "MIT",
+  "author": "tsja",
   "engines": {
     "node": ">=18"
   },

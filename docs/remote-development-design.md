@@ -437,7 +437,7 @@ UI 审批卡片据此渲染"主机、路径、命令"三要素，杜绝"本地�
 | 单包快速迭代 | 在 checkout 里跑 `pnpm dsh web --patch <本仓库>/<pkg>/cordis.patch.yml`（patch 行 name 直接指 `src/index.ts` 绝对路径） | 否 |
 | 多包联调 | `dsh plugin --profile dev add ./packages/fs-ssh`（pnpm `link:` 本地目录，官方支持） | 否 |
 | 端到端测试 | 同一进程内跑真实 sshd（docker）目标 | 否 |
-| 发布 | `npm publish`（带 `dsh.bundle` 声明）→ 用户 `dsh plugin --profile web add @dsh-remote/...` | 否 |
+| 发布 | `npm publish`（带 `dsh.bundle` 声明）→ 用户 `dsh plugin --profile web add @tsja/dsh-remote-ssh` | 否 |
 | 贡献上游（可选） | 按 `adding-a-package.md` 清单搬进 `packages/remote/*` 提 PR | 是（搬代码） |
 
 **组合层叠顺序**（官方 `publish.md`，bundle 作者与用户都必须知道）：
@@ -466,7 +466,7 @@ UI 审批卡片据此渲染"主机、路径、命令"三要素，杜绝"本地�
 
 1. **仓库形态从第一天就是开源项目**：独立 monorepo（本目录 `deepseek--harness-remote`），第一天就放 `LICENSE`（MIT，与上游一致）、README（What/Why/How/Install/Demo）、CHANGELOG、GitHub Actions CI。开源不是"最后发布一下"，是"开发过程的组织方式"。
 2. **包结构按 seam 拆分**（§4.2 的五个包各自独立发布）：这是上游 `adding-a-package.md` 的拓扑要求（Service Definition / Provider / Consumer 分包装），也是社区复用前提 —— 别人能只装 `fs-ssh` 接自己的 transport，只装 `remote-binding` 不用我们的 UI。
-3. **命名与元数据**：npm scope 用 `@dsh-remote/*`（或自有 scope）；包名语义化（`remote`/`fs-ssh`/`subprocess-ssh`/`terminals-ssh`/`ports-ssh`/`remote-binding`/`tool-remote`）；GitHub 仓库打 **`dsh-plugin`** topic；`package.json` 完整填写 repository/description/license/keywords，让搜索引擎与 topic 页都能找到。
+3. **命名与元数据**：当前 npm 包使用用户 scope `@tsja/dsh-remote-ssh`；后续拆包继续放在 `@tsja/*` 下并保持语义化命名（`fs-ssh`/`subprocess-ssh`/`terminals-ssh`/`ports-ssh`/`remote-binding`/`tool-remote`）。GitHub 仓库打 **`dsh-plugin`** topic；`package.json` 完整填写 repository/description/license/keywords，让搜索引擎与 topic 页都能找到。
 4. **依赖声明走上游惯例**：`@deepseek-ai/cordis` 与 dsh seam 包进 peerDependencies（同版本范围，devDependencies 镜像）；`@deepseek-ai/schemastery` 进 dependencies。预览期应对：peer 范围用保守区间（如 `>=0.1.0 <0.2.0`），并维护**兼容矩阵**（见 9.4）。
 5. **README 直接对齐上游规范**（服务 API/事件/扩展点 + "Model Experience" + "Known Limitations and Deferred Work" 三段结构）：将来合并上游零摩擦；社区读者也熟悉这套结构。
 6. **测试与 CI 对齐上游门禁**：vitest 单测 + 组合 snapshot 测试（cordis 组合行）+ 端到端（对 docker sshd 容器起真 sshd 跑全流程）；CI 跑上游五连 `constraints / typecheck / lint / build / hygiene`（+ publint），**另加一个矩阵 job：对上游最新 release 与 master 各跑一遍** —— 预览期破坏性变更靠这个兜底。
@@ -537,15 +537,15 @@ deepseek--harness-remote/
 # <pkg>/cordis.patch.yml
 - insert:
     - id: remote
-      name: '@dsh-remote/remote-ssh'
+      name: '@tsja/dsh-remote-ssh'
     - id: remote-fs
-      name: '@dsh-remote/fs-ssh'
+      name: '@tsja/fs-ssh'
 ```
 
 用户安装（`dsh plugin` 首次使用会初始化 profile 并自动把 bundle 追加进 `dsh.profile.bundles`，`remove` 即卸载）：
 
 ```sh
-dsh plugin --profile web add @dsh-remote/remote-ssh          # npm 发布版（推荐，免构建权限）
+dsh plugin --profile web add @tsja/dsh-remote-ssh          # npm 发布版（推荐，免构建权限）
 dsh plugin --profile web add ./remote-ssh-0.1.0.tgz          # pnpm pack 产物
 dsh plugin --profile web add github:you/dsh-remote#<sha>     # git 直装：需要 prepare 构建脚本 + allowBuilds 白名单
 ```
@@ -558,12 +558,12 @@ dsh plugin --profile web add github:you/dsh-remote#<sha>     # git 直装：需�
 
 **路径 D —— Profile（配置级）**：`profiles/example.yaml` 只含主机/用户/绑定路径占位符，**绝不含密钥**；文档说明密钥走 ssh-agent 与 `~/.ssh/config`（每台本地机器自备），profile 可随仓库版本化、可分享。
 
-**一键装配命令**（`@dsh-remote/cli` 或 `dsh remote setup`，M3 交付）：
+**一键装配命令**（`@tsja/dsh-remote-cli` 或 `dsh remote setup`，M3 交付）：
 
 ```sh
-npx @dsh-remote/cli setup            # 检测 DSH → 安装 preset → 打印组合建议行
-npx @dsh-remote/cli setup --demo     # 附加：docker 起 sshd 容器，30 秒试跑全流程
-npx @dsh-remote/cli doctor           # 诊断：ssh 连通性、agent、known_hosts、绑定目录权限
+npx @tsja/dsh-remote-cli setup            # 检测 DSH → 安装 preset → 打印组合建议行
+npx @tsja/dsh-remote-cli setup --demo     # 附加：docker 起 sshd 容器，30 秒试跑全流程
+npx @tsja/dsh-remote-cli doctor           # 诊断：ssh 连通性、agent、known_hosts、绑定目录权限
 ```
 
 **社区通道**：GitHub topic `dsh-plugin`、Discussions（反馈/问题）、Discord、README 互链；成熟后可选收录到 [AI 原生全景图](https://landscape.jimmysong.io/zh/projects/deepseek-harness/) 这类生态列表。

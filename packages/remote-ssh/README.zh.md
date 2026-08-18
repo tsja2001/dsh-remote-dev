@@ -1,11 +1,11 @@
-# @dsh-remote/remote-ssh
+# @tsja/dsh-remote-ssh
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 提供 AI 原生 SSH 远程开发能力：让模型连接远程设备、执行命令，并通过 SFTP 读取、写入或浏览文件；远端无需安装 Agent。
 
 ## 安装
 
 ~~~sh
-dsh plugin --profile web add @dsh-remote/remote-ssh
+dsh plugin --profile web add @tsja/dsh-remote-ssh
 dsh --profile web
 ~~~
 

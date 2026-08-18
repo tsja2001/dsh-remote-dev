@@ -7,7 +7,7 @@
  * on `ctx.webServer` (`/dsh-remote/api/*`, same-origin only) — and registers
  * the remote_* model tools.
  *
- * @module @dsh-remote/remote-ssh
+ * @module @tsja/dsh-remote-ssh
  */
 
 import { deleteProfile, loadProfiles, resetFingerprint, saveProfiles, upsertProfile } from './profiles.js'

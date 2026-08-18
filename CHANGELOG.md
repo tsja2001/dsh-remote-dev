@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### 发布可靠性
+- npm 发布身份统一为用户 scope `@tsja/dsh-remote-ssh`，并同步插件清单、客户端模块 ID、Preset、安装命令与发布验证。
+- 根项目正式声明 npm workspace，使本地 `link:` 开发安装能够从插件的生产依赖声明构建完整依赖树。
+- `package:check` 现在会把真实 tarball 安装进全新的临时消费者并导入公开入口，发布前验证 `ssh2` 等运行时依赖确实可用。
+- CI 与发布工作流改为等待真实 SSH 握手，避免端口刚监听但 sshd 尚未就绪时提前启动集成测试。
+
 ## 0.3.0
 
 ### 添加工作区 → 选择远程目录

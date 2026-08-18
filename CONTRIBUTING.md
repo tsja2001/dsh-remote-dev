@@ -10,6 +10,8 @@ cd dsh-remote-ssh
 npm install
 ```
 
+本仓库使用 npm workspace 与 `package-lock.json` 管理依赖。DeepSeek Harness 主仓库可以继续使用 pnpm，但不要在本仓库内运行 `pnpm install`，否则会让本地 `link:` 插件失去可解析的运行时依赖。
+
 要求：Node ≥ 18；本地验证建议有 docker（跑一次性 sshd），但不是必须 —— 测试脚本可用环境变量指向任意可达 sshd。
 
 ## 测试 / Testing
@@ -29,6 +31,8 @@ DSH_TEST_NO_PASSWORD=1 DSH_TEST_KEY=$HOME/.ssh/id_ed25519 npm test
 ```
 
 两个测试面：`scripts/test-ssh2.js`（传输层）与 `scripts/test-manager.js`（管理器/存储语义）。CI（`.github/workflows/ci.yml`）在 GitHub Actions 里用同样方式跑。
+
+`npm run package:check` 会把待发布包打成 tarball，在全新的临时项目中安装，再实际导入主入口和 SSH 传输入口。它用于拦截“源码开发正常、发布包缺少运行时依赖”一类问题。
 
 改传输层（`transport.js`）或存储语义（`profiles.js`）前，请先确认本地 `npm test` 绿。
 

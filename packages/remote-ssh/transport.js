@@ -9,7 +9,7 @@
  * and classifies every failure into a stable error code with localized
  * (zh/en) user-facing text — shared by the browser UI and the model tools.
  *
- * @module @dsh-remote/remote-ssh/transport
+ * @module @tsja/dsh-remote-ssh/transport
  */
 
 import { createHash } from 'node:crypto'

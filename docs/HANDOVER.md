@@ -17,7 +17,7 @@ deepseek--harness-remote/
 ├── LICENSE                       # MIT
 ├── README.md                     # 快速开始
 ├── packages/remote-ssh/          # ★ 插件 bundle（可发布、可安装）
-│   ├── package.json              # @dsh-remote/remote-ssh；dsh.bundle + dsh.client 声明
+│   ├── package.json              # @tsja/dsh-remote-ssh；dsh.bundle + dsh.client 声明
 │   ├── index.js                  # Host 插件：RemoteManager + RPC（harness.handle）+ 工具注册
 │   ├── transport.js              # ★ ssh2 传输层：connect/exec/SFTP/平台探测（唯一碰 SSH 协议的文件）
 │   ├── profiles.js               # profile 存储：~/.dsh/remote/profiles.json（0600）
@@ -85,13 +85,13 @@ PASS  test()                 PASS  statusAll (connected / after disconnect)
 PASS  wrong password rejected
 ```
 
-**官方安装路径实测**（`dsh plugin --profile remote-test add ./packages/remote-ssh`）：profile 初始化成功、pnpm link 安装、`dsh.profile.bundles` 自动追加，`--dump-config` 输出 `# == @dsh-remote/remote-ssh` 层与 `remote-ssh` 插件行 —— bundle 组合机制验证通过。
+**官方安装路径实测**（`dsh plugin --profile remote-test add ./packages/remote-ssh`）：profile 初始化成功、pnpm link 安装、`dsh.profile.bundles` 自动追加，`--dump-config` 输出 `# == @tsja/dsh-remote-ssh` 层与 `remote-ssh` 插件行 —— bundle 组合机制验证通过。
 
 **健壮性守卫**（2026-08 补充）：`index.js` 与 `client.js` 对 `harness`/`host`/`styles` 做了存在性守卫——动态插件环境走 RPC 桥；打包安装环境（M2 前）优雅降级：工具可用、UI 显示"RPC bridge unavailable"提示，不崩溃。
 
 **打包模式全链路实测**（2026-08，第二个 web 实例，3090 端口）：
 
-- 建 `web-remote` profile（`@deepseek-ai/dsh-web-app` in-box + `@dsh-remote/remote-ssh`），`dsh --profile web-remote --port 3090` 启动成功，HTTP 200
+- 建 `web-remote` profile（`@deepseek-ai/dsh-web-app` in-box + `@tsja/dsh-remote-ssh`），`dsh --profile web-remote --port 3090` 启动成功，HTTP 200
 - 过程中抓出并修复两个真实打包 bug：① `ctx.tools` 未声明 `inject` 被 Guard 拦截（`index.js` 补 `export const inject = ['tools']`）；② `defineTool` 要求 `output: { schema, render }`（tools.js 全部补齐，含 JSON schema 输出与文本渲染）
 - 页面 boot payload 中出现 `remote-ssh/client.js` —— **`dsh.client` 扫描正确把 bundle 的浏览器面编入 Web 组合**
 
@@ -104,7 +104,7 @@ PASS  wrong password rejected
 
 **持久化自动启动（2026-08，已就绪）**：
 
-- `dsh plugin --profile web add ./packages/remote-ssh` 已把 bundle 装进真实 web profile（`dsh.profile.bundles` 含 `@dsh-remote/remote-ssh`）——**每次 GUI 启动自动加载**，动态插件方案（进程内、重启即失）不再需要
+- `dsh plugin --profile web add ./packages/remote-ssh` 已把 bundle 装进真实 web profile（`dsh.profile.bundles` 含 `@tsja/dsh-remote-ssh`）——**每次 GUI 启动自动加载**，动态插件方案（进程内、重启即失）不再需要
 - **打包模式 HTTP 桥**（M2 前过渡方案）：Host 用 `ctx.inject(['webServer'], ...)` 在 webServer 服务可用后注册 `POST /dsh-remote/api/*` 路由（激活时序无关、服务重载自动重注册）；Client 在 `host` RPC 桥不可用时回退 `fetch('/dsh-remote/api/...')`
 - 打包模式实测（3090 实例）：profiles → save → connect（connected · posix）→ exec（exit 0）→ test 全链路通过；client 模块照常编入 boot payload
 - 教训：`ctx.get('webServer')` 在 apply 时可能拿到 undefined（激活顺序竞态）——**可选但可能晚到的服务要用 `ctx.inject` 而非 get**

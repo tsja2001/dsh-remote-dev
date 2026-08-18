@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./scripts/install.sh                          # local repo bundle (default)
-#   ./scripts/install.sh @dsh-remote/remote-ssh   # npm-published package
+#   ./scripts/install.sh @tsja/dsh-remote-ssh   # npm-published package
 #
 # Env: DSH_PROFILE (default web), DSH_HOME (default ~/.dsh)
 set -euo pipefail
