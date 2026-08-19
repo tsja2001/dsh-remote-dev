@@ -306,11 +306,13 @@ window.__ModuleLoader__.load({
 '\n.dsh-remote-toast.err { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 50%, transparent); }',
 
 /* workspace directory flow (add-workspace picker) */
-'.dsh-remote-wflow-chip { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 1300; }',
-'.dsh-remote-wflow-chip button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 999px;',
-'  cursor: pointer; font-size: 12px; border: 1px solid var(--dsw-alias-border-l2);',
-'  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); box-shadow: 0 6px 18px rgba(0,0,0,.18); }',
-'.dsh-remote-wflow-chip button:hover { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-state-business-primary); }',
+'.dsh-remote-wflow-chip { position: fixed; left: 50%; top: max(16px, calc(50% - 330px)); transform: translateX(-50%); z-index: 1300; }',
+'.dsh-remote-wflow-chip button { display: inline-flex; align-items: center; gap: 8px; min-height: 46px; padding: 11px 24px; border-radius: 12px;',
+'  cursor: pointer; font-size: 14px; font-weight: 600; border: 2px solid var(--dsw-alias-state-business-primary);',
+'  background: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary-inverted, #fff);',
+'  box-shadow: 0 8px 24px rgba(0,0,0,.28); }',
+'.dsh-remote-wflow-chip button:hover { opacity: 0.92; transform: translateY(-1px); }',
+'.dsh-remote-wflow-chip button:focus-visible { outline: 3px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 45%, transparent); outline-offset: 3px; }',
 '.dsh-remote-modal.wflow { width: min(780px, calc(100vw - 40px)); }',
 '.dsh-remote-wflow-body { display: flex; min-height: 0; flex: 1; border-bottom: 1px solid var(--dsw-alias-border-l2); }',
 '.dsh-remote-wflow-machines { width: 224px; flex: none; overflow: auto; padding: 8px; border-right: 1px solid var(--dsw-alias-border-l2);',
@@ -819,10 +821,10 @@ window.__ModuleLoader__.load({
 			const local = props.slots ? findLocalBrowseFlow(props.slots, props.dshRemoteFlow) : null
 			if (local) {
 				return h(React.Fragment, null,
-					h(local.component, Object.assign({}, ownerShare, local.face)),
 					h('div', { className: 'dsh-remote-wflow-chip' },
 						h('button', { type: 'button', onClick: goRemote }, '🌐 ' + tr(lang, 'wflowRemoteChip')),
 					),
+					h(local.component, Object.assign({}, ownerShare, local.face)),
 					h(ToastStack, { items: toasts.items }),
 				)
 			}

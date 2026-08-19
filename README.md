@@ -1,265 +1,116 @@
-<h1 align="center">DeepSeek Harness Remote SSH</h1>
+<h1 align="center">DeepSeek Harness Remote Dev</h1>
 
 <p align="center">
-  <strong>Give your AI coding agent a secure SSH bridge to any machine.</strong><br>
-  Run commands, inspect projects, and read or write remote files from DeepSeek Harness—without installing an agent on the target.
+  <strong>连接远程 SSH 服务器，像在本地环境一样开发</strong><br>
+  在 DeepSeek Harness 中浏览、编辑、执行命令和运行测试；远端无需安装任何 Agent。
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-remote-dev?logo=npm&color=CB3837"></a>
-  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm downloads" src="https://img.shields.io/npm/dm/dsh-remote-dev?logo=npm&color=CB3837"></a>
-  <a href="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
-  <a href="packages/remote-ssh/package.json"><img alt="Node.js 18 or newer" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white"></a>
+  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm 版本" src="https://img.shields.io/npm/v/dsh-remote-dev?logo=npm&color=CB3837"></a>
+  <a href="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml"><img alt="CI 状态" src="https://img.shields.io/github/actions/workflow/status/tsja2001/dsh-remote-dev/ci.yml?label=CI"></a>
+  <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-2ea44a"></a>
 </p>
 
 <p align="center">
-  English · <a href="README.zh.md">简体中文</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#model-tools">Model tools</a> ·
-  <a href="#security-model">Security</a>
+  <a href="README.en.md">English</a> · 简体中文 ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#远程工作区">远程工作区</a> ·
+  <a href="#安全边界">安全边界</a>
 </p>
 
 <p align="center">
-  <img src="docs/images/remote-connections.png" alt="DeepSeek Harness Remote SSH settings UI showing an SSH connection over Tailscale" width="100%">
+  <img src="截图1.png" alt="在 DeepSeek Harness 中配置 SSH 远程连接" width="100%">
 </p>
 
-## What is DeepSeek Harness Remote SSH?
+<p align="center">
+  <img src="截图2.png" alt="在远程 SSH 工作区中像本地一样开发" width="100%">
+</p>
 
-DeepSeek Harness Remote SSH is an open-source **SSH remote development plugin for [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness)**. It adds seven native AI tools—`remote_connect`, `remote_exec`, `remote_read`, `remote_write`, and more—plus a polished Web settings experience for managing Linux, macOS, WSL, and Windows SSH targets.
+## 这是什么？
 
-Your model stays inside DeepSeek Harness. Your source code, build environment, GPU server, homelab, cloud VM, or edge device can live anywhere reachable over SSH.
+DeepSeek Harness Remote Dev 是一个 SSH 远程开发插件：连接任意可访问的 SSH 服务器，把远程目录直接加入 DeepSeek Harness 工作区。像 VS Code Remote Development、Claude Code 和 Codex 的远程开发一样，界面运行在本机，但文件、命令和测试可以直接作用于远程机器。
 
-> One plugin, one familiar workflow: connect a profile, then ask the agent to investigate, edit, build, test, or operate the remote machine.
+无需在远程服务器安装任何服务，目标机器只需要提供 SSH Server 和一个可登录账户；Node.js、DeepSeek Harness 和插件都运行在本机。
 
-## Why use it?
+## 核心体验
 
-| Capability | What it gives you |
-| --- | --- |
-| **AI-native SSH tools** | The model can connect, execute commands, inspect status, and work with UTF-8 files and directories through structured tools. |
-| **Zero remote installation** | The target only needs an SSH server and a login account—no daemon, runtime, or proprietary agent. |
-| **First-class Web UI** | Create, test, edit, connect, browse, and remove profiles without hand-editing configuration files. |
-| **Password or private key** | Use password authentication or an explicit private-key path, including encrypted keys and `~` expansion. |
-| **Linux and Windows aware** | Remote platform detection gives the model the right POSIX or `cmd.exe` command context. |
-| **Designed to fail safely** | Host-key pinning, bounded reconnects, classified errors, same-origin API protection, and no secret echo to the browser. |
-| **Bilingual experience** | The settings UI follows the DeepSeek Harness language in English or Simplified Chinese. |
+- **SSH 直连**：支持 Linux、macOS、WSL 和 Windows SSH 服务器。
+- **像本地一样开发**：选择远程目录后，read、write、edit、glob、grep、bash 等标准工具自动在远端运行。
+- **完整 Web 管理**：在设置中添加、测试、编辑、连接和浏览远程设备，无需手改配置文件。
+- **密码或密钥认证**：支持密码、显式私钥、私钥口令和主机指纹校验。
+- **AI 原生工具**：可使用 remote_connect、remote_exec、remote_read、remote_write、remote_list 处理临时任务。
 
-## Quick start
+## 快速开始
 
-### Requirements
+在你的 DeepSeek Harness 项目根目录下运行：
 
-- Node.js 18 or newer
-- [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) and its `dsh` CLI
-- A reachable SSH server with password or private-key authentication
-
-### 1. Install the plugin
 
 ~~~sh
+# 推荐方式：通过 pnpm 一键安装并注册插件
+pnpm dsh plugin --profile web add dsh-remote-dev
+
+# 若已将 dsh 安装为系统全局命令：
 dsh plugin --profile web add dsh-remote-dev
-dsh --profile web
 ~~~
 
-Using DeepSeek Harness through `npx`? Prefix both commands with `npx @deepseek-ai/dsh`.
+### 连接远程机器
 
-### 2. Add a remote connection
+1. 打开 **设置 → 远程连接**。
+2. 填写主机、端口、用户名和认证方式，点击 **测试连接** 后保存。
+3. 打开 **添加工作区 → 远程机器**，选择远程目录。
 
-Open **Settings → Remote Connections**, enter the host, port, user, and authentication method, then select **Test connection** before saving. You can optionally bind a frequently used directory with the built-in SFTP browser.
+确认后，远程目录会出现在左侧工作区列表中。该工作区下新建的会话会自动使用远程文件和 Shell。
 
-### 3. Ask the agent to work remotely
+## 远程工作区
 
-Two complementary ways:
+远程工作区是本插件的主要使用方式：
 
-**Remote workspaces (VSCode-Remote style).** In the sidebar: **Add workspace → Remote machines → pick a directory**. It becomes an ordinary workspace row (`app [SSH: buildbox]`), and every session you start under it runs `read`/`write`/`edit`/`glob`/`grep`/`bash` inside that directory on that machine — browse, edit, and run tests exactly as you would locally, with nothing else to switch. See *Remote workspaces* below.
+- 远程目录显示为普通工作区，例如 app [SSH: buildbox]；
+- read、write、edit、glob、grep 通过 SFTP 操作远程文件；
+- bash 通过 SSH 在远程目录中执行命令；
+- 相对路径以远程目录为基准，宿主机路径不会泄漏给模型；
+- persona、AGENTS.md、skills、todo、plan 和子 Agent 等其他会话能力继续保留。
 
-**Ad-hoc remote tools.** Or ask in any session:
+如果只需要临时执行远程命令，也可以直接调用 remote_* 工具，不必创建工作区。
 
-> Connect to my staging profile, inspect the repository in `/srv/app`, run its test suite, and explain any failures.
+## 支持的工具
 
-> Read the latest nginx error log on my server and summarize the likely root cause. Do not change anything.
-
-> On my Windows build machine, list the project directory and run the existing build command.
-
-The plugin contributes its own tool guidance to the system prompt, so the model knows how to discover profiles and call the `remote_*` tool family.
-
-## Model tools
-
-| Tool | Purpose |
+| 工具 | 用途 |
 | --- | --- |
-| `remote_status` | List saved profiles, connection state, detected platform, and the most recent classified error. |
-| `remote_connect` | Connect with a saved profile or one-off host credentials. |
-| `remote_disconnect` | Close a profile's live SSH connection. |
-| `remote_exec` | Execute a remote command with stdout, stderr, exit status, and a configurable timeout up to 10 minutes. |
-| `remote_read` | Read a UTF-8 text file over SFTP. |
-| `remote_write` | Write complete UTF-8 text content over SFTP. |
-| `remote_list` | List a remote directory with type, size, and modification time; directories are returned first. |
+| remote_status | 查看连接配置、状态、平台和最近错误 |
+| remote_connect | 连接已保存的配置或临时主机 |
+| remote_disconnect | 断开连接 |
+| remote_exec | 通过 SSH 执行命令 |
+| remote_read / remote_write | 通过 SFTP 读写 UTF-8 文本 |
+| remote_list | 通过 SFTP 浏览远程目录 |
 
-The settings page and model tools share the same connection manager:
+## 安全边界
 
-~~~text
-DeepSeek Harness session / Web UI
-                │
-         remote_* tool or RPC
-                │
-       RemoteManager + profiles
-                │
-       SSH commands + SFTP files
-                │
-     Linux · macOS · WSL · Windows
-~~~
+- 首次连接记录并校验 SSH 主机指纹；
+- 凭据由 DeepSeek Harness 凭据库保存，浏览器不会回显密码或私钥口令；
+- 远程命令使用 SSH 账户本身的权限；
+- 绑定目录是工作区语义，不是操作系统沙箱；
+- 高风险任务请使用专用账户、容器或虚拟机。
 
-## Remote directory browser
-
-Select **Browse…** beside a profile or bound-directory field to navigate the target through SFTP. The browser provides breadcrumbs, parent and home navigation, directory-first sorting, and keyboard support. A selected path can also be copied as a `remote://user@host/path` reference for conversation context.
-
-## Remote workspaces
-
-The plugin occupies the **add-workspace** directory flow (the sidebar's and the new-session
-screen's *Select Workspace Directory* dialog). The dialog keeps its original local browsing
-experience and gains a remote side:
-
-- a floating **pick a directory on a remote machine…** chip switches to the remote tab;
-- the remote tab lists every configured machine (status dot, address, current binding); selecting one connects on demand and browses its directories over SFTP;
-- confirming a directory adds an ordinary workspace row `app [SSH: buildbox]` to the sidebar and opens a session in it, exactly like adopting a local directory.
-
-### Inside a remote session
-
-Every session under that workspace runs its whole standard tool world on the remote machine:
-
-- `read` / `write` / `edit` / `glob` / `grep` operate on remote paths over SFTP — same names, same schemas, same cards;
-- `bash` runs commands on the machine over SSH, with the chosen directory as the default working directory;
-- relative paths resolve against that remote directory and `{{cwd}}` renders it, so the host `cwd` never leaks into the model's reasoning;
-- everything else matches a local session — persona, AGENTS.md instructions, skills, todos, plan mode, compaction, subagents — because the remote preset is *derived from your default preset* rather than a hand-picked handful of tools;
-- local workspaces are untouched, and reopening an old remote session restores the same remote world (the preset id is recorded in the session log).
-
-### How it works, and why
-
-The workspace registry canonicalizes directories through the host's `fs.realpath` and groups
-sessions by their header `cwd`, so a `remote://` path can never be a workspace record. The plugin
-therefore:
-
-1. keeps an empty local **anchor** directory per remote root — `$DSH_HOME/remote-workspaces/<machine>/<dir>-<hash6>/`, carrying a `.dsh-remote-workspace.json` marker — purely as the stable identity the sidebar groups by;
-2. generates an **agent preset** that wraps your default preset in one `isolate: { fs, shell }` group and provides this plugin's SSH implementations inside it; rows that would reach the local machine (host filesystem, host shell, local pty backend) are disabled within that realm;
-3. composes any session whose cwd is an anchor onto that preset at `agent/created` and records the choice in the session log — so there is no preset to pick by hand, and a cold resume needs no hook at all.
-
-Editing your default preset regenerates the remote ones on next use (content-hash comparison). A
-composition without an agent-preset roster (minimal/headless) simply has no remote workspaces; the
-`remote_*` tools keep working.
-
-### Removing one
-
-Delete the workspace row in the sidebar — that is an operator decision and is never undone on the
-next boot. The generated preset is **kept** by default, because past sessions compose it by id and
-deleting it would make them impossible to open. For a full cleanup, use **Settings → Remote
-Connections → Remote workspaces**, remove the entry, and tick *Also delete the generated preset*
-(which removes the anchor directory too).
-
-Uninstalling the plugin restores the original local-only dialog; authored presets remain ordinary
-directories under `.agent-presets/` and can be deleted there or from the preset settings section.
-
-## Security model
-
-Remote access is powerful, so the security boundary is explicit:
-
-- **Trust on first use (TOFU):** the first successful handshake stores the server's OpenSSH-style SHA256 host fingerprint. Later mismatches fail closed and show both fingerprints. For sensitive systems, verify the first fingerprint through a separate trusted channel.
-- **Protected secrets:** standard DeepSeek Harness compositions store passwords and key passphrases through `ctx.credentials`; the profile file keeps references only. Minimal compositions fall back to `~/.dsh/remote/profiles.json` with mode `0600`.
-- **No secret echo:** API responses never include passwords or passphrases. Leaving a secret blank while editing preserves the stored value.
-- **Same-origin browser bridge:** `/dsh-remote/api/*` rejects cross-origin requests and caps request bodies at 1 MiB.
-- **Explicit keys only:** private-key authentication requires a chosen key path. The plugin does not silently try every key in `~/.ssh`.
-- **Least privilege still matters:** commands run with the SSH account's permissions. A bound directory is a convenience, not an operating-system sandbox; use a dedicated account, container, or VM for stronger isolation.
-
-## Connection behavior
-
-- Keepalives detect dead sessions, and the next operation can reconnect with the saved profile.
-- Reconnect attempts are bounded to three per profile in a 60-second window.
-- Authentication, key-file, DNS, timeout, refused, unreachable, reset, and host-key errors are classified into concise English and Chinese messages.
-- Command execution defaults to a 30-second timeout and is capped at 10 minutes.
-- Connections are reused across command and SFTP operations, then removed from the live table when closed.
-
-## Windows and private networks
-
-Windows targets need [OpenSSH Server](https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse) enabled and port 22 allowed through the firewall. A native Windows SSH shell normally uses `cmd.exe`; a target that lands in WSL is detected as POSIX.
-
-The host can be a DNS name, LAN address, public IP, VPN address, or a private overlay such as Tailscale, as long as it is reachable from the machine running DeepSeek Harness.
-
-## Local development
-
-Start a disposable SSH target:
+## 本地开发
 
 ~~~sh
-docker run -d --name dsh-sshd-test -p 2222:2222 \
-  -e PUID=1000 -e PGID=1000 -e TZ=UTC -e SUDO_ACCESS=true \
-  -e USER_NAME=dev -e USER_PASSWORD=test1234 -e PASSWORD_ACCESS=true \
-  linuxserver/openssh-server
-
 npm ci
-npm test
+npm run test:offline
+npm run check
 npm run package:check
 ~~~
 
-Two script suites run against a live SSH server (`scripts/test-manager.js` for the manager/RPC surface, `scripts/test-world.js` for the remote fs/shell world plugins and preset authoring). Both take `DSH_TEST_HOST/PORT/USER/PASSWORD`, `DSH_TEST_KEY`, and `DSH_TEST_NO_PASSWORD=1`; any throwaway SSH machine works.
-
-This repository is an npm workspace and its dependency state is owned by
-`package-lock.json`. The DeepSeek Harness checkout can continue to use pnpm,
-but do not run `pnpm install` inside this plugin checkout.
-
-Install the checkout into a local Web profile:
+把当前源码安装到 Web profile：
 
 ~~~sh
 dsh plugin --profile web add ./packages/remote-ssh
 ~~~
 
-The integration tests accept `DSH_TEST_HOST`, `DSH_TEST_PORT`, `DSH_TEST_USER`, `DSH_TEST_PASSWORD`, `DSH_TEST_KEY`, and `DSH_TEST_NO_PASSWORD=1`, so they can run against any disposable SSH target.
+更多信息：
 
-## Known limitations
-
-- A remote workspace is represented in the sidebar by a local anchor directory (the session `cwd` points at it) — the consequence of the registry grouping by host path; session *contents* — files, commands, relative paths, `{{cwd}}` — are fully remote.
-- Persistent-pty tools (a kept-alive `bash` terminal) are disabled inside a remote workspace: the remote shell runs one command per call.
-- `remote_read` and `remote_write` are currently UTF-8 text operations, not binary transfer tools.
-- ProxyJump, port forwarding, remote terminals, LSP integration, and `known_hosts` interoperability are not implemented yet.
-- Windows transport and default-shell command execution are supported, but the most extensive integration coverage is currently on POSIX targets.
-- DeepSeek Harness is in developer preview and may introduce compatibility-breaking plugin API changes.
-
-## FAQ
-
-<details>
-<summary><strong>Is this an SSH MCP server?</strong></summary>
-
-No. It solves a similar AI-to-SSH use case, but it is a native DeepSeek Harness bundle. Its tools, settings UI, credential service, and system-prompt guidance participate directly in the Harness plugin architecture.
-</details>
-
-<details>
-<summary><strong>Does the remote machine need Node.js or DeepSeek Harness?</strong></summary>
-
-No. The target only needs `sshd`, SFTP support, and a login account. Node.js and DeepSeek Harness run on the local host.
-</details>
-
-<details>
-<summary><strong>Where are connection profiles stored?</strong></summary>
-
-Profile metadata lives at `~/.dsh/remote/profiles.json` by default, or under `$DSH_HOME/remote/profiles.json`. Secrets use the Harness credential service when available.
-</details>
-
-<details>
-<summary><strong>Can I use it over Tailscale, WireGuard, a VPN, or a LAN?</strong></summary>
-
-Yes. The transport only requires that the DeepSeek Harness host can reach the SSH address and port.
-</details>
-
-## Documentation
-
-- [Architecture and roadmap](docs/remote-development-design.md)
-- [Publishing to npm and GitHub](docs/PUBLISHING.md)
-- [Maintainer handover](docs/HANDOVER.md)
-- [Optimization plan](docs/OPTIMIZATION-PLAN.md)
-- [Changelog](CHANGELOG.md)
-- [Contributing guide](CONTRIBUTING.md)
-
-## Project status
-
-This project is community maintained and is not an official DeepSeek AI product. DeepSeek Harness itself is currently in developer preview.
-
-Contributions are welcome—especially reproducible SSH compatibility reports, Windows coverage, security reviews, and focused pull requests. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
-
-## License
-
-[MIT](LICENSE) © 2026 dsh-remote contributors
+- [远程开发设计](docs/remote-development-design.md)
+- [npm 与 GitHub 发布指南](docs/PUBLISHING.md)
+- [维护交接文档](docs/HANDOVER.md)
+- [变更日志](CHANGELOG.md)
+- [MIT License](LICENSE)
