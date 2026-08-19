@@ -18,11 +18,11 @@
  * schemes render correctly; copy is bilingual (zh/en) and follows the
  * shell locale when the service is present.
  *
- * @module @tsja/dsh-remote-ssh/client
+ * @module dsh-remote-dev/client
  */
 
 window.__ModuleLoader__.load({
-	id: '@tsja/dsh-remote-ssh',
+	id: 'dsh-remote-dev',
 	factory: (require) => {
 		const React = require('react')
 		const { useState, useEffect, useRef, useCallback } = React
@@ -72,7 +72,16 @@ window.__ModuleLoader__.load({
 				wflowMachines: '远程机器', wflowNoProfiles: '还没有配置远程连接——到 设置 → 远程连接 添加一台设备。',
 				wflowConnecting: '正在连接 {name}…', wflowChoose: '选择此目录',
 				wflowBound: '已绑定远程工作目录：{ref}',
-				wflowHint: '远程目录将成为会话的远程开发上下文：remote_* 工具的相对路径与 remote_exec 的默认目录都会指向它。',
+				wflowWorkspace: '远程工作区「{title}」已创建，正在打开会话…',
+				wflowNoPresets: '工作区已创建，但当前组合没有 agent 预设名册，会话无法切换到远程执行世界——请在带预设的组合（标准 Web/CLI）中使用，或改用 remote_* 工具。',
+				wflowHint: '选择目录即在左侧工作区栏添加一个远程工作区：在它下面新建的每个会话，read/write/edit/glob/grep/bash 都直接运行在这台远程机器的该目录里，和本地工作区用法完全一样。',
+				wsTitle: '远程工作区', wsNone: '还没有远程工作区——在左侧工作区栏点击「添加工作区」，切到「远程机器」即可创建。',
+				wsIntro: '每个远程工作区在侧边栏就是一个普通工作区；它下面的会话，文件与命令都跑在远程机器上。',
+				wsMachine: '机器', wsRoot: '远程目录', wsPreset: '预设', wsBase: '基础预设',
+				wsRemove: '移除', wsRemoveConfirm: '确认移除？', wsPurge: '同时删除生成的预设',
+				wsPurgeHint: '删除预设后，该工作区下的历史会话将无法再打开。',
+				wsRemoved: '已移除远程工作区 {title}', wsUnregistered: '未在侧边栏显示', wsMissingPreset: '预设缺失',
+				wsRefresh: '重新同步', wsRefreshed: '已重新同步 {count} 个远程工作区',
 				wflowLocalFallback: '当前组合没有提供本机目录浏览对话框。可以直接输入本机目录的绝对路径：',
 				wflowOpenPath: '打开', wflowErrPath: '请输入以 / 开头的绝对路径',
 				wflowBoundDir: '已绑定', wflowPickOne: '选择左侧的机器开始浏览',
@@ -117,7 +126,16 @@ window.__ModuleLoader__.load({
 				wflowMachines: 'Remote machines', wflowNoProfiles: 'No remote connections yet — add one under Settings → Remote Connections.',
 				wflowConnecting: 'Connecting to {name}…', wflowChoose: 'Choose this directory',
 				wflowBound: 'Bound remote working directory: {ref}',
-				wflowHint: 'The remote directory becomes the session remote working context: relative paths of the remote_* tools and remote_exec default to it.',
+				wflowWorkspace: 'Remote workspace “{title}” created — opening a session…',
+				wflowNoPresets: 'Workspace created, but this composition has no agent-preset roster, so sessions cannot switch to the remote world. Use a composition with presets (standard Web/CLI), or use the remote_* tools instead.',
+				wflowHint: 'Choosing a directory adds a remote workspace to the sidebar. Every session you start under it runs read/write/edit/glob/grep/bash inside that directory on the remote machine — exactly like a local workspace.',
+				wsTitle: 'Remote workspaces', wsNone: 'No remote workspaces yet — use “Add workspace” in the sidebar and switch to the Remote machines tab.',
+				wsIntro: 'Each remote workspace is an ordinary sidebar workspace; every session under it runs its files and commands on the remote machine.',
+				wsMachine: 'Machine', wsRoot: 'Remote directory', wsPreset: 'Preset', wsBase: 'Base preset',
+				wsRemove: 'Remove', wsRemoveConfirm: 'Confirm remove?', wsPurge: 'Also delete the generated preset',
+				wsPurgeHint: 'Deleting the preset makes existing sessions of this workspace impossible to open.',
+				wsRemoved: 'Removed remote workspace {title}', wsUnregistered: 'not shown in the sidebar', wsMissingPreset: 'preset missing',
+				wsRefresh: 'Re-sync', wsRefreshed: 'Re-synced {count} remote workspace(s)',
 				wflowLocalFallback: 'This composition provides no local directory dialog. Enter an absolute local directory path instead:',
 				wflowOpenPath: 'Open', wflowErrPath: 'Enter an absolute path starting with /',
 				wflowBoundDir: 'bound', wflowPickOne: 'Pick a machine on the left to start browsing',
@@ -231,6 +249,9 @@ window.__ModuleLoader__.load({
 '\n.dsh-remote-card-err { font-size: 12px; color: var(--dsw-alias-state-error-primary); }',
 '\n.dsh-remote-fp { font-family: ui-monospace, monospace; font-size: 11px; color: var(--dsw-alias-label-caption); }',
 '\n.dsh-remote-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }',
+
+'\n.dsh-remote-ws { display: flex; flex-direction: column; gap: 8px; }',
+'\n.dsh-remote-ws .dsh-remote-intro { margin: 0; }',
 
 '\n.dsh-remote-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 16px;',
 '  border: 1px dashed var(--dsw-alias-border-l2); border-radius: 12px; color: var(--dsh-alias-label-tertiary); }',
@@ -372,10 +393,10 @@ window.__ModuleLoader__.load({
 
 		function useToasts() {
 			const [items, setItems] = useState([])
-			const push = useCallback((kind, text) => {
+			const push = useCallback((kind, text, ms) => {
 				const id = ++toastSeq
 				setItems((a) => [...a.slice(-3), { id, kind, text }])
-				setTimeout(() => setItems((a) => a.filter((x) => x.id !== id)), 4200)
+				setTimeout(() => setItems((a) => a.filter((x) => x.id !== id)), ms || 4200)
 			}, [])
 			return { items, push }
 		}
@@ -596,7 +617,7 @@ window.__ModuleLoader__.load({
 		}
 
 		/** The remote tab: machine list on the left, directory tree on the right. */
-		function RemotePickerPane({ bridge, lang, onBack, onClose, onBound, pushToast }) {
+		function RemotePickerPane({ bridge, lang, onBack, onClose, onCreated, pushToast }) {
 			const [profiles, setProfiles] = useState(null)
 			const [sel, setSel] = useState(null)
 			const [path, setPath] = useState('')
@@ -642,12 +663,21 @@ window.__ModuleLoader__.load({
 			const confirmBind = () => {
 				if (!sel || !path || binding) return
 				setBinding(true)
-				bridge.call('remote.bind', { id: sel, path: path })
+				// The host creates the whole remote workspace: the anchor directory
+				// that gives it a stable identity, the agent preset that puts the
+				// session's file and shell world on this machine, and the sidebar
+				// row itself. Handing the anchor back to the owner's adopt flow is
+				// what opens a session in it — `workspace.create` is idempotent per
+				// directory, so adopting the row the host just made changes nothing.
+				bridge.call('remote.workspace.create', { id: sel, path: path })
 					.then((r) => {
-						const prof = r.profile || {}
-						const ref = 'remote://' + prof.user + '@' + prof.host + ':' + prof.port + path
-						pushToast('ok', tr(lang, 'wflowBound', { ref: ref }))
-						setTimeout(onBound, 400)
+						const ws = r.workspace || {}
+						if (ws.composable === false) {
+							pushToast('err', tr(lang, 'wflowNoPresets'), 9000)
+						} else {
+							pushToast('ok', tr(lang, 'wflowWorkspace', { title: ws.title || path }), 5000)
+						}
+						onCreated(r.anchor || ws.anchor)
 					})
 					.catch((e) => { pushToast('err', errText(e, lang)); setBinding(false) })
 			}
@@ -774,7 +804,12 @@ window.__ModuleLoader__.load({
 						bridge: props.bridge, lang,
 						onBack: () => setTab('local'),
 						onClose: props.onCancel,
-						onBound: props.onCancel,
+						onCreated: (anchor) => {
+							// The owner adopts the anchor exactly as it adopts a local
+							// directory: same createWorkspace call, same session hand-off.
+							if (anchor) props.onPicked(anchor)
+							else props.onCancel()
+						},
 						pushToast: toasts.push,
 					}),
 					h(ToastStack, { items: toasts.items }),
@@ -901,6 +936,64 @@ window.__ModuleLoader__.load({
 			return errors
 		}
 
+		/* Remote workspaces */
+
+		/**
+		 * One remote-workspace row: what the sidebar shows, where it points, and
+		 * the two-step removal. Removing keeps the generated preset unless the
+		 * operator opts out, because every past session of this workspace resumes
+		 * by that preset id.
+		 */
+		function WorkspaceRow({ ws, lang, busy, onRemove }) {
+			const t = (key, vars) => tr(lang, key, vars)
+			const [confirming, setConfirming] = useState(false)
+			const [purge, setPurge] = useState(false)
+			useEffect(() => {
+				if (!confirming) return
+				const timer = setTimeout(() => { setConfirming(false); setPurge(false) }, 6000)
+				return () => clearTimeout(timer)
+			}, [confirming])
+
+			return h('div', { className: 'dsh-remote-card' },
+				h('div', { className: 'dsh-remote-card-main' },
+					h('div', { className: 'dsh-remote-card-title' },
+						h('span', null, '🗂'),
+						h('b', null, ws.title || ws.root),
+						ws.registered === false
+							? h('span', { className: 'dsh-remote-badge' }, t('wsUnregistered'))
+							: null,
+						ws.presetPresent === false
+							? h('span', { className: 'dsh-remote-badge' }, t('wsMissingPreset'))
+							: null,
+					),
+					h('div', { className: 'dsh-remote-card-sub dsh-remote-mono' }, ws.target || ws.root),
+					h('div', { className: 'dsh-remote-fp' },
+						t('wsMachine') + ': ' + (ws.label || ws.profileId)
+						+ ' · ' + t('wsPreset') + ': ' + ws.presetId
+						+ (ws.baseId ? ' · ' + t('wsBase') + ': ' + ws.baseId : ''),
+					),
+					confirming
+						? h('label', { className: 'dsh-remote-fp', style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+							h('input', {
+								type: 'checkbox', checked: purge, onChange: (e) => setPurge(e.target.checked),
+							}),
+							h('span', { title: t('wsPurgeHint') }, t('wsPurge')),
+						)
+						: null,
+				),
+				h('div', { className: 'dsh-remote-card-actions' },
+					h('button', {
+						type: 'button', className: cx('dsh-remote-btn', 'small', confirming && 'danger-armed'), disabled: busy !== null,
+						onClick: () => {
+							if (!confirming) { setConfirming(true); return }
+							setConfirming(false)
+							onRemove(ws, purge)
+						},
+					}, confirming ? t('wsRemoveConfirm') : t('wsRemove')),
+				),
+			)
+		}
+
 		/** Build the settings-section component bound to one bridge. */
 		function makePage(bridge) {
 			return function RemoteConnectionsPage() {
@@ -918,6 +1011,7 @@ window.__ModuleLoader__.load({
 				const [cmd, setCmd] = useState('')
 				const [cmdTarget, setCmdTarget] = useState('')
 				const [out, setOut] = useState(null)
+				const [workspaces, setWorkspaces] = useState([])
 				const toasts = useToasts()
 				const formRef = useRef(null)
 
@@ -925,8 +1019,18 @@ window.__ModuleLoader__.load({
 
 				const refresh = useCallback(() => {
 					bridge.call('remote.list', {}).then(setProfiles).catch((e) => toasts.push('err', errText(e, lang)))
+					// Older hosts (or compositions without a workspace registry) simply
+					// answer with an error here; the section then stays hidden.
+					bridge.call('remote.workspace.list', {})
+						.then((r) => setWorkspaces((r && r.workspaces) || []))
+						.catch(() => setWorkspaces([]))
 				}, [lang])
 				useEffect(refresh, [refresh])
+
+				const onRemoveWorkspace = (ws, deletePreset) => act('ws:' + ws.id, async () => {
+					await bridge.call('remote.workspace.remove', { id: ws.id, deletePreset })
+					toasts.push('ok', t('wsRemoved', { title: ws.title || ws.root }))
+				})
 
 				const set = (field) => (value) => {
 					setForm((f) => Object.assign({}, f, { [field]: value }))
@@ -1029,7 +1133,7 @@ window.__ModuleLoader__.load({
 
 				return h('div', { className: 'dsh-remote-page' },
 					h('h2', null, t('title'), ' ',
-						h('span', { className: 'dsh-remote-badge', title: 'client build' }, 'v0.3'),
+						h('span', { className: 'dsh-remote-badge', title: 'client build' }, 'v0.5'),
 					),
 					h('p', { className: 'dsh-remote-intro' },
 						t('intro'), ' ',
@@ -1115,6 +1219,20 @@ window.__ModuleLoader__.load({
 							})),
 							h('div', { className: 'dsh-remote-fp', style: { textAlign: 'center' } }, t('profilesAt')),
 						),
+
+					/* remote workspaces */
+					workspaces.length > 0 ? h('div', { className: 'dsh-remote-ws' },
+						h('div', { className: 'dsh-remote-form-title' }, t('wsTitle')),
+						h('p', { className: 'dsh-remote-intro' }, t('wsIntro')),
+						h('div', { className: 'dsh-remote-cards' },
+							workspaces.map((ws) => h(WorkspaceRow, {
+								key: ws.id, ws, lang, busy, onRemove: onRemoveWorkspace,
+							})),
+						),
+					) : profiles.length > 0 ? h('div', { className: 'dsh-remote-ws' },
+						h('div', { className: 'dsh-remote-form-title' }, t('wsTitle')),
+						h('p', { className: 'dsh-remote-intro' }, t('wsNone')),
+					) : null,
 
 					/* command test panel */
 					profiles.length > 0 ? h('div', { className: 'dsh-remote-cmd' },

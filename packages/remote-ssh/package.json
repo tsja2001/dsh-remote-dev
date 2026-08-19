@@ -1,6 +1,6 @@
 {
-  "name": "@tsja/dsh-remote-ssh",
-  "version": "0.3.0",
+  "name": "dsh-remote-dev",
+  "version": "0.5.0",
   "description": "DeepSeek Harness SSH plugin for AI remote development: run commands and read, write, or browse files on Linux and Windows servers.",
   "type": "module",
   "main": "./index.js",
@@ -10,6 +10,12 @@
     "./transport": "./transport.js",
     "./profiles": "./profiles.js",
     "./tools": "./tools.js",
+    "./presets": "./presets.js",
+    "./workspaces": "./workspaces.js",
+    "./world-support": "./world-support.js",
+    "./remote-fs": "./remote-fs.js",
+    "./remote-shell": "./remote-shell.js",
+    "./remote-context": "./remote-context.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -18,6 +24,12 @@
     "transport.js",
     "profiles.js",
     "tools.js",
+    "presets.js",
+    "workspaces.js",
+    "world-support.js",
+    "remote-fs.js",
+    "remote-shell.js",
+    "remote-context.js",
     "client.js",
     "cordis.patch.yml",
     "README.md",
@@ -25,7 +37,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check transport.js && node --check profiles.js && node --check tools.js && node --check client.js",
+    "check": "node --check index.js && node --check transport.js && node --check profiles.js && node --check tools.js && node --check presets.js && node --check workspaces.js && node --check world-support.js && node --check remote-fs.js && node --check remote-shell.js && node --check remote-context.js && node --check client.js",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run check"
   },
@@ -51,14 +63,14 @@
     "linux",
     "windows"
   ],
-  "homepage": "https://github.com/tsja2001/dsh-remote-ssh#readme",
+  "homepage": "https://github.com/tsja2001/dsh-remote-dev#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tsja2001/dsh-remote-ssh.git",
+    "url": "git+https://github.com/tsja2001/dsh-remote-dev.git",
     "directory": "packages/remote-ssh"
   },
   "bugs": {
-    "url": "https://github.com/tsja2001/dsh-remote-ssh/issues"
+    "url": "https://github.com/tsja2001/dsh-remote-dev/issues"
   },
   "publishConfig": {
     "access": "public",

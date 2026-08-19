@@ -7,12 +7,14 @@
  * on `ctx.webServer` (`/dsh-remote/api/*`, same-origin only) — and registers
  * the remote_* model tools.
  *
- * @module @tsja/dsh-remote-ssh
+ * @module dsh-remote-dev
  */
 
 import { deleteProfile, loadProfiles, resetFingerprint, saveProfiles, upsertProfile } from './profiles.js'
 import { RemoteConnection, classifyError } from './transport.js'
 import { applyRemoteTools } from './tools.js'
+import { RemoteWorkspaces, workspaceRpc } from './workspaces.js'
+import { MANAGER_KEY } from './world-support.js'
 
 /** Strip secrets from a stored profile before it crosses an RPC boundary. */
 function publicProfile(p, displayName) {
@@ -205,6 +207,23 @@ export class RemoteManager {
 		await this.openConnection(profile)
 		const fresh = loadProfiles().find((p) => p.id === id) || profile
 		return this.statusOf(fresh)
+	}
+
+	/**
+	 * The live RemoteConnection for a stored profile, connecting on demand.
+	 * Used by the preset world plugins (they need the transport object itself,
+	 * not the status snapshot that connect() returns).
+	 */
+	async connection(id) {
+		const profile = loadProfiles().find((p) => p.id === id)
+		if (!profile) throw new Error(`profile not found: ${id}`)
+		let conn = this.connections.get(id)
+		if (!conn || conn.state !== 'connected') {
+			await this.disconnect(id)
+			await this.openConnection(profile)
+			conn = this.connections.get(id)
+		}
+		return conn
 	}
 
 	/** Connect ad-hoc (tool path): stored profile or inline host/user/auth. */
@@ -482,8 +501,9 @@ function withClassified(err) {
  * The package-private RPC surface shared by the browser UI (client.js) and
  * any other consumer: method name -> handler(args) -> pure-JSON result.
  */
-export function rpcTable(manager) {
+export function rpcTable(manager, workspaces) {
 	return {
+		...workspaces ? workspaceRpc(workspaces) : {},
 		'remote.list': async () => manager.statusAll(),
 		'remote.save': async (args) => {
 			const profile = await manager.saveProfile(args?.profile || {})
@@ -507,6 +527,18 @@ export function rpcTable(manager) {
 			const profile = manager.bind(String(args?.id || ''), String(args?.path || ''))
 			return { ok: true, profile }
 		},
+		/**
+		 * Back-compatible alias of `remote.workspace.create` (v0.4 authored the
+		 * preset only; a remote workspace is now a real sidebar workspace).
+		 */
+		'remote.workspace': async (args) => {
+			if (!workspaces) throw new Error('remote workspaces are unavailable in this composition')
+			const record = await workspaces.create({
+				profileId: String(args?.id || args?.profileId || ''),
+				root: String(args?.path || args?.root || ''),
+			})
+			return { ok: true, workspace: record, anchor: record.anchor }
+		},
 		'remote.exec': async (args) => {
 			const id = String(args?.id || '')
 			const conn = await manager.require(id)
@@ -524,11 +556,12 @@ export function rpcTable(manager) {
  * once the webServer service is available and re-register on service reload.
  * @param ctx - plugin context.
  * @param manager - the shared RemoteManager.
+ * @param workspaces - the RemoteWorkspaces service, when one is wired.
  */
-export function applyHttpBridge(ctx, manager) {
+export function applyHttpBridge(ctx, manager, workspaces) {
 	ctx.inject(['webServer'], (serverCtx) => {
 		const webServer = serverCtx.webServer
-		const table = rpcTable(manager)
+		const table = rpcTable(manager, workspaces)
 
 		const MAX_BODY = 1024 * 1024
 
@@ -605,7 +638,20 @@ export function applyHttpBridge(ctx, manager) {
 
 export function apply(ctx) {
 	const manager = new RemoteManager()
-	const table = rpcTable(manager)
+
+	// Publish the manager for the world plugins (remote-fs/remote-shell)
+	// loaded by authored presets in THIS process; withdrawn on unload so a
+	// reload gap surfaces as an actionable error instead of a stale manager.
+	// Before any wiring below, because an already-available service makes
+	// `ctx.inject` fire during that call.
+	globalThis[MANAGER_KEY] = manager
+
+	// Remote workspaces: sidebar rows whose sessions run on the remote machine.
+	// Wiring is service-optional, so a headless or preset-less composition keeps
+	// working with the standalone remote_* tools alone.
+	const workspaces = new RemoteWorkspaces({ manager })
+	workspaces.attach(ctx)
+	const table = rpcTable(manager, workspaces)
 
 	// Package-private RPC consumed by the browser UI (client.js). `harness` is
 	// provided by the dynamic-plugin runtime; when this bundle runs as a
@@ -622,9 +668,12 @@ export function apply(ctx) {
 		void manager.adoptCredentials(credCtx.credentials)
 	})
 
-	applyHttpBridge(ctx, manager)
+	applyHttpBridge(ctx, manager, workspaces)
 	applyRemoteTools(ctx, manager)
 
 	// Close every connection when the plugin unloads.
-	ctx.effect(() => () => manager.closeAll())
+	ctx.effect(() => () => {
+		if (globalThis[MANAGER_KEY] === manager) delete globalThis[MANAGER_KEY]
+		manager.closeAll()
+	})
 }

@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm version" src="https://img.shields.io/npm/v/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-remote-dev?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm downloads" src="https://img.shields.io/npm/dm/dsh-remote-dev?logo=npm&color=CB3837"></a>
+  <a href="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <a href="packages/remote-ssh/package.json"><img alt="Node.js 18 or newer" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white"></a>
 </p>
@@ -55,7 +55,7 @@ Your model stays inside DeepSeek Harness. Your source code, build environment, G
 ### 1. Install the plugin
 
 ~~~sh
-dsh plugin --profile web add @tsja/dsh-remote-ssh
+dsh plugin --profile web add dsh-remote-dev
 dsh --profile web
 ~~~
 
@@ -67,7 +67,11 @@ Open **Settings → Remote Connections**, enter the host, port, user, and authen
 
 ### 3. Ask the agent to work remotely
 
-Try prompts such as:
+Two complementary ways:
+
+**Remote workspaces (VSCode-Remote style).** In the sidebar: **Add workspace → Remote machines → pick a directory**. It becomes an ordinary workspace row (`app [SSH: buildbox]`), and every session you start under it runs `read`/`write`/`edit`/`glob`/`grep`/`bash` inside that directory on that machine — browse, edit, and run tests exactly as you would locally, with nothing else to switch. See *Remote workspaces* below.
+
+**Ad-hoc remote tools.** Or ask in any session:
 
 > Connect to my staging profile, inspect the repository in `/srv/app`, run its test suite, and explain any failures.
 
@@ -107,17 +111,50 @@ DeepSeek Harness session / Web UI
 
 Select **Browse…** beside a profile or bound-directory field to navigate the target through SFTP. The browser provides breadcrumbs, parent and home navigation, directory-first sorting, and keyboard support. A selected path can also be copied as a `remote://user@host/path` reference for conversation context.
 
-## Pick a remote directory when adding a workspace
+## Remote workspaces
 
-The plugin also occupies the **add-workspace** directory flow (the workspace picker's *Select Workspace Directory* dialog). The dialog keeps its original local browsing experience and gains a remote side:
+The plugin occupies the **add-workspace** directory flow (the sidebar's and the new-session
+screen's *Select Workspace Directory* dialog). The dialog keeps its original local browsing
+experience and gains a remote side:
 
 - a floating **pick a directory on a remote machine…** chip switches to the remote tab;
 - the remote tab lists every configured machine (status dot, address, current binding); selecting one connects on demand and browses its directories over SFTP;
-- confirming a directory binds it as the session's **remote working context** for that machine: the `remote_*` tools resolve relative paths against it, `remote_exec` runs there by default, and the system prompt tells the model which remote directory is the primary working directory (most recent binding first).
+- confirming a directory adds an ordinary workspace row `app [SSH: buildbox]` to the sidebar and opens a session in it, exactly like adopting a local directory.
 
-Uninstalling the plugin restores the original local-only dialog.
+### Inside a remote session
 
-> Boundary note: DSH workspaces themselves are local (`createWorkspace` resolves the path through the host's own filesystem), so a remote pick becomes the remote working context above rather than a DSH workspace entry. A `remote://` *workspace* proper requires the upstream `ctx.fs`/`ctx.subprocess` provider seam planned in `docs/remote-development-design.md`.
+Every session under that workspace runs its whole standard tool world on the remote machine:
+
+- `read` / `write` / `edit` / `glob` / `grep` operate on remote paths over SFTP — same names, same schemas, same cards;
+- `bash` runs commands on the machine over SSH, with the chosen directory as the default working directory;
+- relative paths resolve against that remote directory and `{{cwd}}` renders it, so the host `cwd` never leaks into the model's reasoning;
+- everything else matches a local session — persona, AGENTS.md instructions, skills, todos, plan mode, compaction, subagents — because the remote preset is *derived from your default preset* rather than a hand-picked handful of tools;
+- local workspaces are untouched, and reopening an old remote session restores the same remote world (the preset id is recorded in the session log).
+
+### How it works, and why
+
+The workspace registry canonicalizes directories through the host's `fs.realpath` and groups
+sessions by their header `cwd`, so a `remote://` path can never be a workspace record. The plugin
+therefore:
+
+1. keeps an empty local **anchor** directory per remote root — `$DSH_HOME/remote-workspaces/<machine>/<dir>-<hash6>/`, carrying a `.dsh-remote-workspace.json` marker — purely as the stable identity the sidebar groups by;
+2. generates an **agent preset** that wraps your default preset in one `isolate: { fs, shell }` group and provides this plugin's SSH implementations inside it; rows that would reach the local machine (host filesystem, host shell, local pty backend) are disabled within that realm;
+3. composes any session whose cwd is an anchor onto that preset at `agent/created` and records the choice in the session log — so there is no preset to pick by hand, and a cold resume needs no hook at all.
+
+Editing your default preset regenerates the remote ones on next use (content-hash comparison). A
+composition without an agent-preset roster (minimal/headless) simply has no remote workspaces; the
+`remote_*` tools keep working.
+
+### Removing one
+
+Delete the workspace row in the sidebar — that is an operator decision and is never undone on the
+next boot. The generated preset is **kept** by default, because past sessions compose it by id and
+deleting it would make them impossible to open. For a full cleanup, use **Settings → Remote
+Connections → Remote workspaces**, remove the entry, and tick *Also delete the generated preset*
+(which removes the anchor directory too).
+
+Uninstalling the plugin restores the original local-only dialog; authored presets remain ordinary
+directories under `.agent-presets/` and can be deleted there or from the preset settings section.
 
 ## Security model
 
@@ -159,6 +196,8 @@ npm test
 npm run package:check
 ~~~
 
+Two script suites run against a live SSH server (`scripts/test-manager.js` for the manager/RPC surface, `scripts/test-world.js` for the remote fs/shell world plugins and preset authoring). Both take `DSH_TEST_HOST/PORT/USER/PASSWORD`, `DSH_TEST_KEY`, and `DSH_TEST_NO_PASSWORD=1`; any throwaway SSH machine works.
+
 This repository is an npm workspace and its dependency state is owned by
 `package-lock.json`. The DeepSeek Harness checkout can continue to use pnpm,
 but do not run `pnpm install` inside this plugin checkout.
@@ -173,7 +212,8 @@ The integration tests accept `DSH_TEST_HOST`, `DSH_TEST_PORT`, `DSH_TEST_USER`, 
 
 ## Known limitations
 
-- A remote directory picked in the add-workspace flow is a *remote working context* (bound directory for the `remote_*` tools and the system prompt), not a DSH workspace entry: the workspace registry itself resolves paths through the host's local filesystem.
+- A remote workspace is represented in the sidebar by a local anchor directory (the session `cwd` points at it) — the consequence of the registry grouping by host path; session *contents* — files, commands, relative paths, `{{cwd}}` — are fully remote.
+- Persistent-pty tools (a kept-alive `bash` terminal) are disabled inside a remote workspace: the remote shell runs one command per call.
 - `remote_read` and `remote_write` are currently UTF-8 text operations, not binary transfer tools.
 - ProxyJump, port forwarding, remote terminals, LSP integration, and `known_hosts` interoperability are not implemented yet.
 - Windows transport and default-shell command execution are supported, but the most extensive integration coverage is currently on POSIX targets.

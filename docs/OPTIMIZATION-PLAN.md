@@ -6,6 +6,8 @@
 > 实施结果：M1–M5 全部落地并实测通过（两套测试全绿 + 3090 二号实例全链路冒烟 + CSRF/TOFU/凭据迁移验证）；明细见 docs/HANDOVER.md §5。
 >
 > **v0.3 追加（2026-08，用户后续需求“添加工作区可选远程目录”）**：directoryFlow 已在插件层接管（本机页签内嵌官方对话框 + 远程页签机器列表/自动连接/目录浏览），确认目录绑定为会话远程工作上下文（工具相对路径 / exec 默认 cwd / systemPrompt 动态段落）。`remote://` 成为 DSH 工作区条目仍需上游 seam——见 HANDOVER §5 v0.3 边界说明。
+>
+> **v0.4 追加（2026-08，用户需求“像 VSCode Remote 一样无感开发”）**：远程工作区升级为 **agent 预设**（isolate fs+shell 的组合 + 标准工具行遮蔽全局），选预设的新会话其 read/write/edit/glob/grep/bash 整体跑在远程机器上。侧栏文件夹分组仍是上游 `workspaceRegistry`（宿主 realpath）边界，以预设芯片/标签呈现。全链路 48 项新测试；见 HANDOVER §5 v0.4。
 
 ---
 
@@ -196,7 +198,7 @@
 
 - tools.js：remote_connect 补 `passphrase` 参数（修 B3）、auth 枚举更新、输出统一走错误分类；remote_status 输出加 lastError；remote_exec 增加默认 60s、上限 10min 约束说明。
 - 代码整理：index.js 的 RPC 注册去重（harness.handle 与 HTTP 桥共用一张 method 表）；删除 `client.js.dynamic.bak`、`package.json.bak`。
-- package.json：version 0.2.0、repository/bugs/homepage 补齐（`https://github.com/tsja2001/dsh-remote-ssh`）、engines.node>=18、description 去掉 agent 表述。
+- package.json：version 0.2.0、repository/bugs/homepage 补齐（`https://github.com/tsja2001/dsh-remote-dev`）、engines.node>=18、description 去掉 agent 表述。
 - 文档：README.md / README.zh.md 重写（新表单截图位、认证说明、**安全模型一节**：TOFU、CSRF 防护、凭据存储模式、明文回退的风险）、CHANGELOG.md（0.2.0 条目）、CONTRIBUTING.md（开发/测试如何跑）、docs/HANDOVER.md 增补 v0.2 记录。
 - 测试（scripts/，node 原生 assert 风格保持一致）：
   - test-manager.js：迁移（agent→key）、空白密码保留、port 归一化、tilde 展开、错误分类映射、browse 自动连接与条目结构、browseClose。

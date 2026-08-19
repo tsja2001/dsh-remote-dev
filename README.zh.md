@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm 版本" src="https://img.shields.io/npm/v/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://www.npmjs.com/package/@tsja/dsh-remote-ssh"><img alt="npm 下载量" src="https://img.shields.io/npm/dm/%40tsja%2Fdsh-remote-ssh?logo=npm&color=CB3837"></a>
-  <a href="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml"><img alt="CI 状态" src="https://github.com/tsja2001/dsh-remote-ssh/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm 版本" src="https://img.shields.io/npm/v/dsh-remote-dev?logo=npm&color=CB3837"></a>
+  <a href="https://www.npmjs.com/package/dsh-remote-dev"><img alt="npm 下载量" src="https://img.shields.io/npm/dm/dsh-remote-dev?logo=npm&color=CB3837"></a>
+  <a href="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml"><img alt="CI 状态" src="https://github.com/tsja2001/dsh-remote-dev/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <a href="packages/remote-ssh/package.json"><img alt="Node.js 18 或更新版本" src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white"></a>
 </p>
@@ -55,7 +55,7 @@ DeepSeek Harness Remote SSH 是一款开源的 **[DeepSeek Harness](https://gith
 ### 1. 安装插件
 
 ~~~sh
-dsh plugin --profile web add @tsja/dsh-remote-ssh
+dsh plugin --profile web add dsh-remote-dev
 dsh --profile web
 ~~~
 
@@ -67,7 +67,11 @@ dsh --profile web
 
 ### 3. 直接用自然语言安排远程任务
 
-例如：
+两种互补方式：
+
+**远程工作区（VSCode Remote 体验）。** 侧边栏 **添加工作区 → 远程机器 → 选目录**，它就成为一个普通工作区（显示为 `app [SSH: 机器名]`）。在它下面新建的每个会话，`read`/`write`/`edit`/`glob`/`grep`/`bash` 都直接作用于那台机器的那个目录——浏览、编辑、跑测试都和本地开发一样，不需要任何额外切换。详见下文《远程工作区》。
+
+**临时远程工具。** 或在任何会话里直接说：
 
 > 连接 staging 配置，检查 `/srv/app` 里的项目，运行测试并解释失败原因；暂时不要修改文件。
 
@@ -107,17 +111,39 @@ DeepSeek Harness 会话 / Web 设置页
 
 连接卡片和绑定目录字段旁都可以点击 **浏览…**，直接通过 SFTP 查看远端目录。浏览器支持面包屑、返回上级、回到主目录、目录优先排序和键盘操作。选中路径后，还能复制 `remote://user@host/path` 引用，把准确位置带进会话上下文。
 
-## 添加工作区时选择远程目录
+## 远程工作区
 
-插件还会接管“选择工作区目录”弹窗（工作区入口的添加目录对话框）。弹窗保留原有的本机浏览体验，并新增远程一侧：
+插件接管了“选择工作区目录”弹窗（侧边栏与新会话页的**添加工作区**入口）。弹窗保留原生的本机浏览体验，并新增远程一侧：
 
 - 底部悬浮按钮 **选择远程机器上的目录…** 切到远程页签；
 - 远程页签列出所有已配置机器（状态点、地址、当前绑定）；未连接的机器点击即自动连接并浏览其目录；
-- 确认目录后即绑定为该机器的 **远程工作上下文**：`remote_*` 工具的相对路径以它为基准、`remote_exec` 默认在其中执行，系统提示会告诉模型哪个远程目录是主工作目录（最近绑定优先）。
+- 确认目录后，侧边栏立刻出现一个普通工作区行 `app [SSH: 机器名]`，并像本地工作区一样直接打开一个会话。
 
-卸载插件即恢复原生的本机目录弹窗。
+### 会话里发生了什么
 
-> 边界说明：DSH 工作区注册表本身只认本机路径（`createWorkspace` 在 Host 本机解析路径），因此远程选择成为上述会话级远程工作上下文，而不是一条工作区记录。真正的 `remote://` 工作区需要上游 `ctx.fs`/`ctx.subprocess` Provider 缝（见 `docs/remote-development-design.md` 路线图）。
+在该工作区下新建的每个会话，标准工具世界整体运行在远程机器上：
+
+- `read` / `write` / `edit` / `glob` / `grep` 通过 SFTP 直接操作远程路径——工具名、参数、结果卡片完全一致；
+- `bash` 通过 SSH 在机器上执行命令，默认工作目录就是所选目录；
+- 相对路径一律以该远程目录为基准，`{{cwd}}` 也渲染为远程路径，宿主 `cwd` 不会泄漏给模型；
+- 其余能力与本地会话完全相同：persona、AGENTS.md、skills、todo、plan 模式、上下文压缩、子智能体……因为远程预设是从你的**默认预设**派生的，而不是写死的一小撮工具；
+- 本地工作区不受影响；重新打开旧的远程会话仍然回到同一个远程世界（预设 id 记录在会话日志里）。
+
+### 实现方式（以及为什么是这样）
+
+DSH 的工作区注册表用宿主 `fs.realpath` 归一化目录、并按会话 header 的 `cwd` 分组，`remote://` 结构上不可能成为工作区记录。插件因此：
+
+1. 为每个远程根目录准备一个空的本地**锚点目录** `$DSH_HOME/remote-workspaces/<机器>/<目录>-<hash6>/`（内含 `.dsh-remote-workspace.json` 说明），它只提供侧边栏分组所需的稳定身份；
+2. 生成一份 **agent 预设**：把你的默认预设整体放进 `isolate: {fs, shell}` 组，并在组内提供本插件的远程 `fs`/`shell` 实现；会落到本机的行（宿主文件系统 / 宿主 shell / 本地 pty 后端）在该 realm 内被禁用；
+3. 会话创建时（`agent/created`）若 cwd 命中锚点，自动把该会话组合到这份预设上，并把选择写入会话日志——所以你不需要手动选预设，冷启动恢复也不需要。
+
+默认预设改动后，远程预设会在下次使用时自动重新生成（按内容哈希比对）。组合里没有预设 roster（极简/headless 组合）时，远程工作区不可用，插件退化为 `remote_*` 工具。
+
+### 移除
+
+在侧边栏删除工作区行即可移除；这是操作者的决定，重启后不会被重新创建。生成的预设**默认保留**——历史会话按预设 id 组合，删除会导致旧会话打不开。需要彻底清理时，到 **设置 → 远程连接 → 远程工作区** 点击移除并勾选「同时删除生成的预设」（同时删除锚点目录）。
+
+卸载插件即恢复原生的本机目录弹窗；已创建的预设是 `.agent-presets/` 下的普通目录，可在预设设置里删除。
 
 ## 安全模型
 
@@ -167,11 +193,12 @@ npm run package:check
 dsh plugin --profile web add ./packages/remote-ssh
 ~~~
 
-集成测试支持 `DSH_TEST_HOST`、`DSH_TEST_PORT`、`DSH_TEST_USER`、`DSH_TEST_PASSWORD`、`DSH_TEST_KEY` 与 `DSH_TEST_NO_PASSWORD=1`，因此也可以使用任意一次性 SSH 测试机。
+集成测试支持 `DSH_TEST_HOST`、`DSH_TEST_PORT`、`DSH_TEST_USER`、`DSH_TEST_PASSWORD`、`DSH_TEST_KEY` 与 `DSH_TEST_NO_PASSWORD=1`，因此也可以使用任意一次性 SSH 测试机。两个脚本套件都会打到真实 SSH 服务器：`scripts/test-manager.js` 覆盖管理器与 RPC 面，`scripts/test-world.js` 覆盖远程 fs/shell 世界插件与预设生成。
 
 ## 当前限制
 
-- 添加工作区时选择的远程目录是 *远程工作上下文*（`remote_*` 工具与系统提示的绑定目录），不是一条 DSH 工作区记录：工作区注册表本身在 Host 本机解析路径。
+- 远程工作区在侧边栏由一个本地锚点目录代表（会话 `cwd` 指向它），这是上游注册表按宿主路径分组的必然结果；会话内部——文件、命令、相对路径、`{{cwd}}`——完全在远程。
+- 远程工作区内禁用了常驻 pty 工具（持久 bash 终端）：远程 shell 每次调用执行一条命令。
 - `remote_read` 与 `remote_write` 目前面向 UTF-8 文本，不是二进制传输工具。
 - 暂不支持 ProxyJump、端口转发、远程终端、LSP 和 `known_hosts` 互操作。
 - Windows 传输层与默认 shell 命令执行已经支持，但目前最完整的集成测试覆盖仍在 POSIX 目标上。

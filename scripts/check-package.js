@@ -16,7 +16,7 @@ const scratch = mkdtempSync(join(tmpdir(), 'dsh-remote-package-check-'))
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 try {
-	console.log('Packing @tsja/dsh-remote-ssh...')
+	console.log('Packing dsh-remote-dev...')
 	execFileSync(npm, ['pack', packageRoot, '--pack-destination', scratch], {
 		cwd: repositoryRoot,
 		stdio: 'inherit',
@@ -45,11 +45,17 @@ try {
 	})
 
 	const smokeTest = `
-		const plugin = await import('@tsja/dsh-remote-ssh')
-		const transport = await import('@tsja/dsh-remote-ssh/transport')
+		const plugin = await import('dsh-remote-dev')
+		const transport = await import('dsh-remote-dev/transport')
+		const presets = await import('dsh-remote-dev/presets')
+		const fsWorld = await import('dsh-remote-dev/remote-fs')
+		const shellWorld = await import('dsh-remote-dev/remote-shell')
 		if (typeof plugin.apply !== 'function') throw new Error('missing apply export')
 		if (typeof plugin.RemoteManager !== 'function') throw new Error('missing RemoteManager export')
 		if (typeof transport.RemoteConnection !== 'function') throw new Error('missing RemoteConnection export')
+		if (typeof presets.ensureRemotePreset !== 'function') throw new Error('missing ensureRemotePreset export')
+		if (typeof fsWorld.apply !== 'function') throw new Error('missing remote-fs apply export')
+		if (typeof shellWorld.apply !== 'function') throw new Error('missing remote-shell apply export')
 		console.log('Package consumer import passed')
 	`
 	execFileSync(process.execPath, ['--input-type=module', '--eval', smokeTest], {

@@ -9,7 +9,7 @@
  * and classifies every failure into a stable error code with localized
  * (zh/en) user-facing text — shared by the browser UI and the model tools.
  *
- * @module @tsja/dsh-remote-ssh/transport
+ * @module dsh-remote-dev/transport
  */
 
 import { createHash } from 'node:crypto'
@@ -115,6 +115,9 @@ export class RemoteConnection {
 		this.profile = profile
 		this.hooks = hooks
 		this.client = null
+		/** Shared SFTP channel (reused across operations; reopened when lost). */
+		this._sftp = null
+		this._sftpAlive = false
 		/** 'posix' | 'windows' — detected on connect, drives tool hints. */
 		this.platform = null
 		/** 'connecting' | 'connected' | 'degraded' | 'closed' */
@@ -279,46 +282,119 @@ export class RemoteConnection {
 		return this.platform
 	}
 
-	/** Run one command non-interactively; resolves with code/signal/stdout/stderr. */
-	execRaw(command, opts = {}) {
+	/**
+	 * Start one exec channel and hand back a session handle with incremental
+	 * callbacks, optional stdin, and a timeout/abort-driven close. Shared by the
+	 * buffered {@link execRaw} and the streaming world executors.
+	 */
+	startExec(command, opts = {}) {
+		const client = this.client
+		if (!client) throw new Error('not connected')
+		const timeoutMs = opts.timeoutMs === undefined ? undefined : Math.min(Number(opts.timeoutMs) || 30000, 600000)
 		return new Promise((resolve, reject) => {
-			const client = this.client
-			if (!client) return reject(new Error('not connected'))
-			const timeoutMs = Math.min(Number(opts.timeoutMs) || 30000, 600000)
 			client.exec(command, (err, stream) => {
-				if (err) return reject(new Error(`remote exec failed: ${err.message}`))
-				let stdout = ''
-				let stderr = ''
+				if (err) return reject(Object.assign(new Error(`remote exec failed: ${err.message}`), { code: 'EXEC' }))
 				let settled = false
+				let timer = null
+				const session = {
+					stream,
+					/** 'running' | 'completed' | 'killed' */
+					status: 'running',
+					code: null,
+					signal: null,
+					/** Resolves once the channel closes; never rejects. */
+					done: null,
+					/** Bytes accepted so far, for cap enforcement by callers. */
+					stdoutBytes: 0,
+					stderrBytes: 0,
+					kill() {
+						if (settled) return false
+						try {
+							stream.close()
+						} catch {
+							/* already closed */
+						}
+						return true
+					},
+				}
 				const finish = (code, signal) => {
 					if (settled) return
 					settled = true
-					clearTimeout(timer)
-					resolve({ code, signal, stdout, stderr })
+					if (timer) clearTimeout(timer)
+					if (opts.onAbort) opts.signal?.removeEventListener?.('abort', opts.onAbort)
+					session.code = code === undefined ? null : code
+					session.signal = signal === undefined ? null : signal
+					session.status = signal ? 'killed' : 'completed'
+					session.doneResolve?.()
+					opts.onClose?.(session)
 				}
-				const timer = setTimeout(() => {
-					try {
-						stream.close()
-					} catch {
-						/* already closed */
+				session.done = new Promise((res) => { session.doneResolve = res })
+				if (timeoutMs !== undefined) {
+					timer = setTimeout(() => {
+						if (!settled) {
+							try { stream.close() } catch { /* already closed */ }
+							finish(null, 'timeout')
+						}
+					}, timeoutMs)
+				}
+				if (opts.onAbort && opts.signal) {
+					if (opts.signal.aborted) {
+						try { stream.close() } catch { /* already closed */ }
+						finish(null, 'abort')
+					} else {
+						opts.signal.addEventListener('abort', () => {
+							if (settled) return
+							opts.onAbort()
+							try { stream.close() } catch { /* already closed */ }
+							finish(null, 'abort')
+						})
 					}
-					finish(null, 'timeout')
-				}, timeoutMs)
+				}
 				stream.on('close', (code, signal) => finish(code, signal))
 				stream.on('data', (d) => {
-					stdout += d.toString()
+					if (settled) return
+					session.stdoutBytes += d.length
+					try { opts.onStdout?.(d) } catch { /* listener errors must not break the channel */ }
 				})
 				stream.stderr.on('data', (d) => {
-					stderr += d.toString()
+					if (settled) return
+					session.stderrBytes += d.length
+					try { opts.onStderr?.(d) } catch { /* listener errors must not break the channel */ }
 				})
 				stream.on('error', (e) => {
 					if (!settled) {
-						clearTimeout(timer)
-						settled = true
-						reject(new Error(`remote exec stream error: ${e.message}`))
+						session.error = e
+						finish(null, 'error')
+						reject(Object.assign(new Error(`remote exec stream error: ${e.message}`), { code: 'STREAM' }))
 					}
 				})
+				if (opts.stdin !== undefined && opts.stdin !== null) {
+					try {
+						stream.end(opts.stdin)
+					} catch {
+						/* a channel that refused stdin simply runs without it */
+					}
+				}
+				// Without stdin, leave the channel's stdin open: ending it races the
+				// remote's pending output (a channel close can discard unread data).
+				// Commands that would block reading stdin must be fed via opts.stdin.
+				resolve(session)
 			})
+		})
+	}
+
+	/** Run one command non-interactively; resolves with code/signal/stdout/stderr. */
+	execRaw(command, opts = {}) {
+		let stdout = ''
+		let stderr = ''
+		return this.startExec(command, {
+			...opts,
+			onStdout: (d) => { stdout += d.toString() },
+			onStderr: (d) => { stderr += d.toString() },
+		}).then(async (session) => {
+			await session.done
+			if (session.error) throw session.error
+			return { code: session.code, signal: session.signal, stdout, stderr }
 		})
 	}
 
@@ -327,12 +403,26 @@ export class RemoteConnection {
 		return this.execRaw(command, opts)
 	}
 
-	/** Obtain a one-shot SFTP handle. */
+	/**
+	 * Obtain the connection's shared SFTP channel (lazily opened, reused for
+	 * every operation). A dead channel is dropped so the next call reopens.
+	 */
 	sftp() {
+		if (this._sftp && this._sftpAlive) return Promise.resolve(this._sftp)
+		const client = this.client
+		if (!client) return Promise.reject(new Error('not connected'))
 		return new Promise((resolve, reject) => {
-			const client = this.client
-			if (!client) return reject(new Error('not connected'))
-			client.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)))
+			client.sftp((err, sftp) => {
+				if (err) return reject(err)
+				this._sftp = sftp
+				this._sftpAlive = true
+				// A closed/end event means the channel is gone; reopen on next use.
+				sftp.on('close', () => {
+					this._sftp = null
+					this._sftpAlive = false
+				})
+				resolve(sftp)
+			})
 		})
 	}
 
@@ -365,6 +455,108 @@ export class RemoteConnection {
 		return new Promise((resolve, reject) => {
 			sftp.writeFile(path, content, (err) => (err ? reject(err) : resolve(true)))
 		})
+	}
+
+	/** Read a remote file as raw bytes (binary-safe). */
+	async readFileBytes(path) {
+		const sftp = await this.sftp()
+		return new Promise((resolve, reject) => {
+			sftp.readFile(path, (err, data) => (err ? reject(err) : resolve(data)))
+		})
+	}
+
+	/** Stat a remote path (follows symlinks); resolves ssh2 Stats. */
+	async statPath(path) {
+		const sftp = await this.sftp()
+		return new Promise((resolve, reject) => {
+			sftp.stat(path, (err, stats) => (err ? reject(err) : resolve(stats)))
+		})
+	}
+
+	/** Lstat a remote path (does not follow the final symlink). */
+	async lstatPath(path) {
+		const sftp = await this.sftp()
+		return new Promise((resolve, reject) => {
+			sftp.lstat(path, (err, stats) => (err ? reject(err) : resolve(stats)))
+		})
+	}
+
+	/** Read raw ssh2 directory entries ({ filename, longname, attrs }). */
+	async readDirRaw(path) {
+		const sftp = await this.sftp()
+		return new Promise((resolve, reject) => {
+			sftp.readdir(path, (err, list) => {
+				if (err) return reject(err)
+				resolve(
+					(list || [])
+						.map((entry) => (Array.isArray(entry) ? { filename: entry[0], attrs: entry[1] } : entry))
+						.filter((entry) => entry.filename !== '.' && entry.filename !== '..'),
+				)
+			})
+		})
+	}
+
+	/** Open a remote file for streaming reads; resolves { read(buf, off, len, pos), close() }. */
+	async openReadHandle(path) {
+		const sftp = await this.sftp()
+		return new Promise((resolve, reject) => {
+			sftp.open(path, 'r', (err, handle) => {
+				if (err) return reject(err)
+				resolve({
+					read: (buffer, offset, length, position) =>
+						new Promise((res, rej) => {
+							sftp.read(handle, buffer, offset, length, position, (e, bytesRead, b) =>
+								e ? rej(e) : res({ bytesRead, buffer: b }),
+							)
+						}),
+					close: () =>
+						new Promise((res) => {
+							sftp.close(handle, () => res())
+						}),
+				})
+			})
+		})
+	}
+
+	/**
+	 * Write a remote file atomically: stage a sibling temp file, fsync-close it,
+	 * then rename over the target. The remote platform drives the rename
+	 * fallback (Windows SFTP rename refuses to replace an existing target).
+	 */
+	async writeFileAtomic(path, bytes) {
+		const sftp = await this.sftp()
+		const posix = this.platform !== 'windows'
+		const dir = posix ? (path.lastIndexOf('/') > 0 ? path.slice(0, path.lastIndexOf('/')) : '/') : path.split('/').slice(0, -1).join('/')
+		const rand = Math.random().toString(36).slice(2, 10)
+		const tmp = `${dir.replace(/\/+$/, '')}/.dsh-remote-tmp-${rand}`
+		const writeTmp = () =>
+			new Promise((resolve, reject) => {
+				sftp.writeFile(tmp, bytes, (err) => (err ? reject(err) : resolve()))
+			})
+		const rename = (from, to) =>
+			new Promise((resolve, reject) => {
+				sftp.rename(from, to, (err) => (err ? reject(err) : resolve()))
+			})
+		const unlink = (p) =>
+			new Promise((resolve) => {
+				sftp.unlink(p, () => resolve())
+			})
+		try {
+			await writeTmp()
+			try {
+				await rename(tmp, path)
+			} catch {
+				// Standard SFTP rename refuses to replace an existing target on
+				// every platform (the atomic posix-rename extension is not always
+				// advertised), so clear the target and retry. The stale-version
+				// guards above keep concurrent-edit races from slipping through.
+				await unlink(path)
+				await rename(tmp, path)
+			}
+		} catch (err) {
+			await unlink(tmp).catch(() => {})
+			throw err
+		}
 	}
 
 	/**

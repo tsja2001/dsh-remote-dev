@@ -17,8 +17,11 @@ deepseek--harness-remote/
 ├── LICENSE                       # MIT
 ├── README.md                     # 快速开始
 ├── packages/remote-ssh/          # ★ 插件 bundle（可发布、可安装）
-│   ├── package.json              # @tsja/dsh-remote-ssh；dsh.bundle + dsh.client 声明
-│   ├── index.js                  # Host 插件：RemoteManager + RPC（harness.handle）+ 工具注册
+│   ├── package.json              # dsh-remote-dev；dsh.bundle + dsh.client 声明
+│   ├── index.js                  # Host 插件：RemoteManager + RPC（harness.handle）+ 工具注册 + 远程工作区接线
+│   ├── workspaces.js             # ★ 远程工作区：记录存储 + 锚点目录 + workspaceRegistry 注册 + 自动组合钩子
+│   ├── presets.js                # ★ 预设生成：从默认预设派生（缩进位移 + 三处外科手术改写）
+│   ├── remote-fs.js / remote-shell.js / remote-context.js   # 预设内的远程世界（fs / shell / 提示词朝向）
 │   ├── transport.js              # ★ ssh2 传输层：connect/exec/SFTP/平台探测（唯一碰 SSH 协议的文件）
 │   ├── profiles.js               # profile 存储：~/.dsh/remote/profiles.json（0600）
 │   ├── tools.js                  # remote_status/connect/disconnect/exec/read/write/list + prompt 段
@@ -85,13 +88,13 @@ PASS  test()                 PASS  statusAll (connected / after disconnect)
 PASS  wrong password rejected
 ```
 
-**官方安装路径实测**（`dsh plugin --profile remote-test add ./packages/remote-ssh`）：profile 初始化成功、pnpm link 安装、`dsh.profile.bundles` 自动追加，`--dump-config` 输出 `# == @tsja/dsh-remote-ssh` 层与 `remote-ssh` 插件行 —— bundle 组合机制验证通过。
+**官方安装路径实测**（`dsh plugin --profile remote-test add ./packages/remote-ssh`）：profile 初始化成功、pnpm link 安装、`dsh.profile.bundles` 自动追加，`--dump-config` 输出 `# == dsh-remote-dev` 层与 `remote-ssh` 插件行 —— bundle 组合机制验证通过。
 
 **健壮性守卫**（2026-08 补充）：`index.js` 与 `client.js` 对 `harness`/`host`/`styles` 做了存在性守卫——动态插件环境走 RPC 桥；打包安装环境（M2 前）优雅降级：工具可用、UI 显示"RPC bridge unavailable"提示，不崩溃。
 
 **打包模式全链路实测**（2026-08，第二个 web 实例，3090 端口）：
 
-- 建 `web-remote` profile（`@deepseek-ai/dsh-web-app` in-box + `@tsja/dsh-remote-ssh`），`dsh --profile web-remote --port 3090` 启动成功，HTTP 200
+- 建 `web-remote` profile（`@deepseek-ai/dsh-web-app` in-box + `dsh-remote-dev`），`dsh --profile web-remote --port 3090` 启动成功，HTTP 200
 - 过程中抓出并修复两个真实打包 bug：① `ctx.tools` 未声明 `inject` 被 Guard 拦截（`index.js` 补 `export const inject = ['tools']`）；② `defineTool` 要求 `output: { schema, render }`（tools.js 全部补齐，含 JSON schema 输出与文本渲染）
 - 页面 boot payload 中出现 `remote-ssh/client.js` —— **`dsh.client` 扫描正确把 bundle 的浏览器面编入 Web 组合**
 
@@ -104,12 +107,39 @@ PASS  wrong password rejected
 
 **持久化自动启动（2026-08，已就绪）**：
 
-- `dsh plugin --profile web add ./packages/remote-ssh` 已把 bundle 装进真实 web profile（`dsh.profile.bundles` 含 `@tsja/dsh-remote-ssh`）——**每次 GUI 启动自动加载**，动态插件方案（进程内、重启即失）不再需要
+- `dsh plugin --profile web add ./packages/remote-ssh` 已把 bundle 装进真实 web profile（`dsh.profile.bundles` 含 `dsh-remote-dev`）——**每次 GUI 启动自动加载**，动态插件方案（进程内、重启即失）不再需要
 - **打包模式 HTTP 桥**（M2 前过渡方案）：Host 用 `ctx.inject(['webServer'], ...)` 在 webServer 服务可用后注册 `POST /dsh-remote/api/*` 路由（激活时序无关、服务重载自动重注册）；Client 在 `host` RPC 桥不可用时回退 `fetch('/dsh-remote/api/...')`
 - 打包模式实测（3090 实例）：profiles → save → connect（connected · posix）→ exec（exit 0）→ test 全链路通过；client 模块照常编入 boot payload
 - 教训：`ctx.get('webServer')` 在 apply 时可能拿到 undefined（激活顺序竞态）——**可选但可能晚到的服务要用 `ctx.inject` 而非 get**
 
 ## 5. 版本记录
+
+### v0.5 增量（远程目录 = 侧边栏工作区，闭环）
+
+- **落地的核心命题**：远程目录现在就是侧边栏里的一个普通工作区；在它下面新建会话即在远程开发，无需再手动选预设。v0.4 的"预设芯片"手工步骤消失。
+- **锚点目录（anchor）**：`workspaceRegistry.create()` 走宿主 `realpath + stat`，且会话按 header.cwd 归组——`remote://` 结构上不可能注册。故每个远程根目录配一个空的本地锚点 `$DSH_HOME/remote-workspaces/<机器>/<目录>-<hash6>/`（含 `.dsh-remote-workspace.json` 说明），只承担"稳定身份"，执行世界全在远端。记录存 `$DSH_HOME/remote/workspaces.json`（0600）。
+- **注册与推送**：Host 直接调 `ctx.workspaceRegistry.create(anchor, title)` + `setTitle`（标题 `app [SSH: 机器名]`）。api-proxy 监听 `domain/changed` 自动向浏览器推 `host/workspace-changed`——侧边栏无需客户端配合即刷新。客户端确认后仍把 anchor 交给官方 `onPicked`（`createWorkspace` 按规范路径幂等），于是"选目录 → 直接进入会话"这一段沿用官方流程。
+- **自动组合**：`agent/created`（同步监听，异步执行）→ 会话 cwd 命中锚点且 `composedPreset !== presetId` 时 `agentPresets.recompose(agent.ctx, presetId)`，随后 `session.append('agent-preset/selected')`——冷启动恢复由 `resolveSessionPreset` 从日志读取，钩子不参与。`agent/pre-step`（waterfall）等待进行中的切换，堵住"创建后立刻发消息"的竞态。`agent-preset/selected` 在 `API_REMOTE_FORWARDED_EVENTS` 里，预设芯片会实时更新。
+- **预设从默认预设派生**：读默认预设文件（`agentPresets.resolve()` 给 `path`），整体缩进 4 空格塞进 `isolate:{fs,shell}` 组。**纯行级改写**而非 YAML 反序列化——`!!js` 表达式、块标量、注释逐字节保留（沙箱内无法安装 js-yaml，且重新序列化必然改写用户的排版）。三处手术：嵌套 `isolate:` 去掉 `fs`/`shell` 键（空了则删掉 `isolate:` 行本身）、本机世界行加 `disabled: true`、相对 `name:` 绝对化。制表符 / 多文档 YAML 会拒绝位移并回退到内置行清单。
+- **禁用清单的安全性原则**：只禁用「服务后端」（其服务由我们在同一 realm 提供：fs-local/fs-sandbox/fs-e2b/bash-*/pwsh-*）与「消费者」（tool-bash-persistent / tool-terminal）；**绝不禁用别的行 inject 的 provider**（如 `dsh-terminal` 注册表保留），否则 `inactiveRows` 会让整个挂载失败。`terminal-bash` 走 `ctx.subprocess`（本机），必须禁用，否则远程会话里会静默开出一个本机常驻 shell。
+- **陈旧检测**：生成目录写 `source.json`（generator 版本 + baseId + basePath + base 内容哈希），创建工作区与每次远程会话组合前比对；默认预设改了就重写文件，预设服务按文件戳启用新一代挂载。
+- **`{{cwd}}` 说真话**：`remote-context.js` 在预设作用域用 `systemPrompt.variable('cwd')` 遮蔽全局（"Scoped values shadow globals"），渲染为远程根目录，并加一段说明（order 120）告诉模型别推理本机环境。
+- **移除语义**：`reconcile()` 只修锚点/预设并同步 workspaceId，**不重新注册**——侧边栏删除是操作者决定，重启不复活。`remove()` 默认保留预设（历史会话按 id 组合它），`deletePreset: true` 才彻底清理（连锚点一起删）。
+- **降级**：`workspaceRegistry` / `agentPresets` 均用 `ctx.inject` 可选接线；无 roster 时 `record.composable=false`，UI 明确告警而不是静默在本机跑。
+- **测试**：`scripts/test-workspaces.js` 77 项，**不需要 SSH，也不需要宿主进程**（用契约替身模拟 workspaceRegistry / agentPresets / cordis ctx）；含真实出厂预设 `standard`/`minimal`/`code` 的改写 + YAML 往返解析比对（js-yaml 从宿主 node_modules 探测，缺失则 SKIP）。`npm test` 以它开头，`npm run test:offline` 单跑。
+
+### v0.4 增量（远程工作区 = 真·远程会话）
+
+- **架构发现**：DSH 的官方"换执行世界"先例是 E2B（`fs-e2b`/`subprocess-e2b` 组合级替换）；preset 组合支持 `cordis:group + isolate: {fs, shell}` 隔离 realm，且**作用域工具注册遮蔽同名全局工具**（dsh-tools `register`："Scoped tools shadow globals"）——这给插件一条不改宿主的正路：**远程工作区 = 一个 agent 预设**。
+- **生成链路**：选目录确认 → RPC `remote.workspace`（幂等）→ 写 `$DSH_HOME/.agent-presets/remote-ssh-<profile>-<hash8>/agent.cordis.yml` + `preset.yml`（名称 `SSH · 机器名`）；组合内 4 行：remote-fs.js（绝对路径行，PresetTree.import 支持绝对 file URL）、remote-shell.js、tool-fs、tool-fs-search、tool-bash（后三者标准包名，从 harness 基座解析，同 minimal preset 先例）。preset 服务每次 roster 读取都重扫目录——无需重启即可在新建会话的预设芯片里看到。
+- **remote-fs.js**：FileSystem 契约 SFTP 实现（resolve/stat/lstat/readText/streamText/readBytes/listDir/writeText/editText）。版本令牌 `path:mtimeMs:size`；守卫写与字面量编辑完整（FS_NOT_OBSERVED/FS_STALE_VERSION/FS_EDIT_NOT_FOUND/FS_AMBIGUOUS_EDIT）；CRLF 检测与保留；二进制拒绝（前 8KB NUL）；20MB 读上限；错误映射 FS_*。
+- **remote-shell.js**：ShellExecutor 契约 SSH 实现。`resolve` 默认 workdir=绑定目录、超时默认 120s 上限 600s；`buildCommand` POSIX `cd 'dir' || exit 99; export K='v'; bash -c '…'` / Windows `cd /d "dir" && set K=V && …`；run：env 导出、stdin、超时/abort 首因分类、stdout/stderr 独立截断（lossy）；start：后台句柄增量读（stderr `[stderr]` 标记段）、`_killed` 标志保证 kill 语义、幂等。DSH_* 宿主环境变量有意不透传（描述的是本机）。
+- **transport 强化**：`startExec(command, opts)` 会话化统一（stdin/abort 闭通道/增量回调/超时）；execRaw 改其上构建（保留错误 reject 语义）。SFTP 通道**连接级缓存**（`_sftp/_sftpAlive`，close 事件失效重开）——此前每操作新开通道会耗尽 sshd MaxSessions（真实踩坑：Channel open failure）。`writeFileAtomic`：暂存 `.dsh-remote-tmp-*` + rename；标准 SFTP rename 拒绝覆盖已存在目标（所有平台），先 unlink 再 rename（守卫版本令牌兜底竞态）。
+- **进程内桥**：index.js apply 把 manager 挂 `globalThis[Symbol.for('dsh-remote-ssh.manager')]`（卸载撤销）；世界插件 `worldSupport(ctx, config).acquire()` 经它拿共享连接（连接失败下次重试）。预设行的 config 烘焙 profile id + root。**注意 manager.connection(id) 才返回连接对象**——connect(id) 返回状态快照（3090 真实会话 E2E 踩坑：`conn.startExec is not a function`）。
+- **cwd 语义（关键设计）**：fs 工具层把会话宿主 cwd 注入每次调用；远程世界里相对路径**一律以绑定 root 为基准**（VSCode Remote 心智模型，宿主 cwd 不泄漏）。bash workdir：远程存在→采纳（模型显式指定的情况），不存在→回退 root（真远程机器上宿主 cwd 必不存在）。
+- **踩坑记录**（复现与修复都在 scripts/test-world.js 覆盖）：① 无 stdin 时 `stream.end()` 过早 CHANNEL_CLOSE 丢弃未传输出（竞态）→ 仅显式 stdin 时 end；② collector 正常路径漏赋值 text（只写了截断分支）→ 全空输出；③ abort 无 signal 时 addEventListener 崩 + abort 不闭通道；④ JS 字符串 `'\0'` 是真 NUL 字节，SSH exec 请求含 NUL 被服务端拒（invalid format）——测试命令须写 `'\\0'`。
+- **边界（诚实）**：工作区侧栏分组 = 宿主 realpath(header.cwd)，远程会话不会成为侧栏"文件夹"，以预设芯片+会话头标签呈现；会话内部（文件/命令/相对路径）完全远程。`session.header.cwd` 校验 `isAbsolute`（宿主语义），故远程会话不带 cwd——工具默认目录由 preset 烘焙的 root 提供。
+- **实测**：`scripts/test-world.js` 52/52（真实 sshd：全 FileSystem 契约 + Shell 前后台/超时/abort/env/stdin/截断/双向 cwd 回退 + 预设生成幂等/删除防逃逸/列表）；`npm test` 三链全绿；manager 32 项回归通过；**3090 真实会话 E2E**：session.create(agentPreset) → bash 执行带 `$SSH_CONNECTION`（端口 2223，铁证走 SSH）→ 相对路径 read 命中远程 root 并以标准文件卡片渲染。
 
 ### v0.3 增量（添加工作区选远程目录）
 
@@ -138,7 +168,9 @@ PASS  wrong password rejected
 
 - 极简组合（无 credentials 服务）下密钥仍落 profiles.json（0600，UI 有徽标提示）
 - 自动重连是"下次操作时"而非后台主动；无 degraded 期间的重试队列
-- GUI 顶部"添加工作区"（directoryFlow 插槽）尚未接入远程目录 —— 需要 DSH 上游 remote:// workspace seam（createWorkspace 走本机 fs.realpath），假接入弊大于利，已列入下一步
+- 远程工作区在侧边栏由本地锚点目录代表（会话 header.cwd 指向它）；这是上游按宿主路径归组的必然结果，会话内部完全远程（v0.5）
+- 远程工作区内禁用常驻 pty（`terminal-bash` 走 ctx.subprocess = 本机）；远程 shell 每次调用一条命令
+- worker 线程里的 workflow 行组合到远程预设时拿不到进程内 manager（`globalThis` 不跨线程），调用时报错而非挂载失败
 - Windows 远端仅验证传输层可连；cmd 语法由平台探测提示
 - 无 LSP、无端口转发预览、无跳板机（ProxyJump）、无 known_hosts 互操作
 

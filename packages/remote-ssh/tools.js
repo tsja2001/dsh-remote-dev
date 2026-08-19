@@ -4,7 +4,7 @@
  * Registered on the `tools` service; the plugin also adds a systemPrompt
  * section so the model knows the remote tool family exists.
  *
- * @module @tsja/dsh-remote-ssh/tools
+ * @module dsh-remote-dev/tools
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -243,7 +243,7 @@ export function applyRemoteTools(ctx, manager) {
 function registerRemotePromptSection(ctx, manager) {
 	let registered = false
 	const sectionText = () => {
-		const base = 'Use the remote_* tools to work on a machine reachable over SSH: remote_connect first (auth is password or key), then remote_exec / remote_read / remote_write / remote_list with the profile id. Remote paths are paths on the remote machine. On Windows targets, commands run through cmd.exe.'
+		const base = 'Use the remote_* tools to work on a machine reachable over SSH: remote_connect first (auth is password or key), then remote_exec / remote_read / remote_write / remote_list with the profile id. Remote paths are paths on the remote machine. On Windows targets, commands run through cmd.exe. When a session runs on a remote machine through a remote-workspace preset, its ordinary read/write/edit/glob/grep/bash tools already operate there directly — use those instead of the remote_* tools inside such a session.'
 		const bound = manager.boundContexts()
 		if (bound.length === 0) return base
 		const lines = bound.map((p) => {

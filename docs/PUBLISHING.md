@@ -1,12 +1,12 @@
 # npm 与 GitHub 发布指南
 
-本仓库的可发布包位于 `packages/remote-ssh`，包名为 `@tsja/dsh-remote-ssh`。根目录只是开发与测试工作区，已设置 `private: true`，不会被误发到 npm。
+本仓库的可发布包位于 `packages/remote-ssh`，包名为 `dsh-remote-dev`。根目录只是开发与测试工作区，已设置 `private: true`，不会被误发到 npm。
 
 ## 发布身份
 
 当前配置使用以下公开身份：
 
-- npm：`@tsja/dsh-remote-ssh`
+- npm：`dsh-remote-dev`
 - GitHub：`tsja2001/dsh-remote-ssh`
 - 默认分支：`main`
 
@@ -101,9 +101,9 @@ npm 的 scoped package 默认可能是 private，因此虽然 `package.json` 已
 发布后验证元数据和安装路径：
 
 ~~~sh
-npm view @tsja/dsh-remote-ssh
-npm view @tsja/dsh-remote-ssh dist.tarball
-dsh plugin --profile web add @tsja/dsh-remote-ssh
+npm view dsh-remote-dev
+npm view dsh-remote-dev dist.tarball
+dsh plugin --profile web add dsh-remote-dev
 ~~~
 
 ## 配置 trusted publishing
@@ -143,7 +143,7 @@ GitHub 仓库中也创建名为 `npm` 的 Environment，建议开启必要的审
 README 和 npm keywords 已覆盖 DeepSeek Harness、DSH plugin、AI coding agent、SSH、SFTP、remote development、remote execution、Linux、Windows 与 DevOps 等真实能力。仓库创建后还需要在 GitHub 页面完成：
 
 - Description：`AI-native SSH remote development plugin for DeepSeek Harness — remote exec, file operations, and connection management without a remote agent.`
-- Website：`https://www.npmjs.com/package/@tsja/dsh-remote-ssh`
+- Website：`https://www.npmjs.com/package/dsh-remote-dev`
 - Topics：`dsh-plugin`、`deepseek-harness`、`deepseek`、`ai-agent`、`ai-coding-agent`、`ssh`、`sftp`、`remote-development`、`devops`
 - 启用 Issues 与 Discussions
 - 设置与 README 首屏一致的 Social preview

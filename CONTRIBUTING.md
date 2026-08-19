@@ -5,7 +5,7 @@
 ## 开发环境 / Setup
 
 ```sh
-git clone https://github.com/tsja2001/dsh-remote-ssh.git
+git clone https://github.com/tsja2001/dsh-remote-dev.git
 cd dsh-remote-ssh
 npm install
 ```

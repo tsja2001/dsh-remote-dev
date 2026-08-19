@@ -1,10 +1,10 @@
 # Remote development agent preset.
 #
 # Install: copy this directory to $DSH_HOME/.agent-presets/remote-dev/
-# (roster auto-discovers it), then make sure the @tsja/dsh-remote-ssh
+# (roster auto-discovers it), then make sure the dsh-remote-dev
 # bundle is installed in the deployment (dsh plugin --profile <name> add ...).
 #
 # The plugin itself registers the remote_* tools and their prompt guidance,
 # so this preset only needs to bring the plugin row into the agent scope.
 - id: remote-ssh
-  name: '@tsja/dsh-remote-ssh'
+  name: 'dsh-remote-dev'
