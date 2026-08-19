@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-dev",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DeepSeek Harness SSH plugin for AI remote development: run commands and read, write, or browse files on Linux and Windows servers.",
   "type": "module",
   "main": "./index.js",
