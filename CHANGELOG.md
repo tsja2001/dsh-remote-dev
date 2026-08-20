@@ -8,6 +8,23 @@
 - `package:check` 现在会把真实 tarball 安装进全新的临时消费者并导入公开入口，发布前验证 `ssh2` 等运行时依赖确实可用。
 - CI 与发布工作流改为等待真实 SSH 握手，避免端口刚监听但 sshd 尚未就绪时提前启动集成测试。
 
+## 0.6.1
+
+### 一条命令装好（修复 pnpm 拦下安装的问题）
+
+- **问题**：`dsh plugin add dsh-remote-dev` 在 pnpm 11 上以 `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: cpu-features@0.0.10, ssh2@1.17.0` 失败。pnpm 11 的 `strictDepBuilds` 默认开启：依赖树里**任何**带构建脚本的包，只要没在 `allowBuilds` 里表态，就是硬错误。更要命的是 `dsh plugin` 只在 pnpm 退出码为 0 时才执行 `dsh.profile.bundles` 的登记——所以包已经下载进 `node_modules`、`dependencies` 也写好了，但插件**根本不会被加载**（本地实测复现：`bundles` 里只有 base 与 web-app）。
+- **判断**：`ssh2` 的两个构建脚本都是**可选**的原生加速（它自己的 `install` 编译 crypto binding，可选依赖 `cpu-features` 走 node-gyp）。ssh2 是纯 JavaScript 实现，没有原生模块时回退到 Node 自带 crypto——本仓库的 `node_modules/ssh2` 从来就没有编译产物，而所有真实 SSH 测试一直通过。因此正确答案是**明确拒绝**这两个构建：功能零损失，还免掉了对 C++ 编译工具链的要求。
+- **`setup.js`（新增，发布为 `bin`）**：`npx dsh-remote-dev@latest setup` 一条命令完成安装——
+  1. 准备 profile 目录与 `pnpm-workspace.yaml`（缺失时按 dsh 的模板创建）；
+  2. 写入 `allowBuilds: { ssh2: false, cpu-features: false }`，并把 pnpm 失败时留下的 `set this to true or false` 占位符改成明确的 `false`；已有的人工决定（包括 `true`）一律不覆盖；
+  3. 调用 `dsh plugin --profile <名称> add <包>`（自动探测 `dsh`：PATH → 本地 `node_modules/.bin` → Harness 检出下的 `pnpm dsh`；也可 `--dsh "<命令>"` 指定），找不到 dsh 时回退到 `pnpm add` 并自行补齐 profile 清单（含该 profile 的出厂 bundle 列表）与 `dsh.profile.bundles` 登记；
+  4. 校验 profile 真的登记了这个 bundle，再打印下一步。
+  幂等：可以直接在失败留下的半成品状态上重跑修复。选项：`--profile` / `--package` / `--dsh` / `--home` / `--allow-native`（改为编译原生加速）/ `--dry-run` / `--lang` / `--help`；输出跟随 `LANG` 中英双语。
+- **`scripts/install.sh`** 改为调用同一个安装器（源码安装：`./scripts/install.sh`）。
+- **文档**：README（中/英）与 npm 页面的「快速开始」改为一条命令，并新增「安装遇到问题？」小节，把上面的报错原文、成因与手动两行 YAML 的做法都写清楚（便于搜索到）。
+- **测试**：新增 `scripts/test-setup.js`（52 项）覆盖参数解析、`allowBuilds` 改写（占位符归位、已有决定不覆盖、其他包与注释不受影响、行内映射、`dangerouslyAllowAllBuilds`、含冒号的 dep-path 键、版本限定键）、profile 清单补齐与端到端安装（含失败退出码与幂等重跑）；`npm test` / `npm run test:offline` 以它开头。
+- **真实验证**（本地 pnpm 11.9.0 + 真实 dsh CLI）：`dsh plugin add <tarball>` 复现出与用户完全一致的报错并确认 `bundles` 未登记；运行安装器后同一 profile 安装成功、`bundles` 含 `dsh-remote-dev`、启动后 `/dsh-remote/api/profiles` 正常响应（插件已加载）。同时验证「拒绝构建」的语义确实是**包照常安装、脚本不执行**。
+
 ## 0.5.0
 
 ### 远程目录 = 侧边栏工作区（本次要解决的核心问题）

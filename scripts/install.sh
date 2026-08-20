@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# One-command installer for dsh-remote-ssh.
+# One-command installer for dsh-remote-dev (repo copy).
+#
+# Published users do not need this file — they run:
+#   npx dsh-remote-dev@latest setup
+#
+# This wrapper installs THIS working copy into a profile, which is what you
+# want while developing the plugin.
 #
 # Usage:
-#   ./scripts/install.sh                          # local repo bundle (default)
-#   ./scripts/install.sh dsh-remote-dev   # npm-published package
+#   ./scripts/install.sh                       # install ./packages/remote-ssh
+#   ./scripts/install.sh dsh-remote-dev        # install the published package
+#   DSH_PROFILE=headless ./scripts/install.sh  # a different profile
 #
-# Env: DSH_PROFILE (default web), DSH_HOME (default ~/.dsh)
+# Env: DSH_PROFILE (default web), DSH_HOME (default ~/.dsh), DSH_BIN (dsh command)
 set -euo pipefail
 
-PKG="${1:-./packages/remote-ssh}"
-PROFILE="${DSH_PROFILE:-web}"
-DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+pkg="${1:-$here/packages/remote-ssh}"
+profile="${DSH_PROFILE:-web}"
 
-echo "== 1/2 installing bundle '$PKG' into profile '$PROFILE'"
-dsh plugin --profile "$PROFILE" add "$PKG"
-
-echo "== 2/2 installing agent preset"
-mkdir -p "$DSH_HOME/.agent-presets"
-cp -r presets/remote-dev "$DSH_HOME/.agent-presets/"
-
-echo
-echo "done. Restart the web GUI (or open Settings → Remote Connections)."
-echo "The preset will be picked up automatically by the roster on next session creation."
+# setup.js does the whole job: it records the pnpm build decision the profile
+# needs (ssh2 ships an optional native build that pnpm 11 refuses to ignore
+# silently), runs `dsh plugin add`, and verifies the bundle is registered.
+exec node "$here/packages/remote-ssh/setup.js" setup --profile "$profile" --package "$pkg" "${@:2}"

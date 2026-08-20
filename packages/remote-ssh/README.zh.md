@@ -4,12 +4,24 @@
 
 ## 安装
 
+一条命令装好：
+
 ~~~sh
-dsh plugin --profile web add dsh-remote-dev
-dsh --profile web
+npx dsh-remote-dev@latest setup          # 默认安装到 web profile
 ~~~
 
-随后打开 **设置 → 远程连接**，添加密码或私钥配置，先测试再保存并连接。
+随后启动 Harness（`dsh --profile web`），打开 **设置 → 远程连接**，添加密码或私钥配置，先测试再保存并连接。
+
+安装器做的事：`dsh plugin add` 内部调用 pnpm，而 pnpm 11 遇到任何带构建脚本的依赖都会直接失败（`ERR_PNPM_IGNORED_BUILDS`），此时 `dsh` 不会把插件登记进 profile——包下载了却不会加载。本插件唯一依赖 `ssh2` 带两个**可选**原生编译脚本（它自身的 `install` 与可选依赖 `cpu-features` 的 node-gyp），而 ssh2 是纯 JavaScript 实现、没有原生模块时自动回退到 Node crypto，因此这两个构建被明确拒绝——不需要本机编译环境。安装器把这个决定写进 profile 后再执行安装并校验结果：
+
+~~~yaml
+# ~/.dsh/profiles/web/pnpm-workspace.yaml
+allowBuilds:
+  ssh2: false
+  cpu-features: false
+~~~
+
+有了这两行，直接执行 `dsh plugin --profile web add dsh-remote-dev` 也能成功。
 
 ## 远程工作区
 

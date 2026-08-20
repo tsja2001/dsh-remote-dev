@@ -1,8 +1,8 @@
 <h1 align="center">DeepSeek Harness Remote Dev</h1>
 
 <p align="center">
-  <strong>Connect to an SSH server and develop as if it were a local environment.</strong><br>
-  Browse files, edit code, run commands, and test remote projects from DeepSeek Harness—without installing an agent on the target.
+  <strong>Turn a directory on a remote server into a DeepSeek Harness workspace and develop in it like a local one.</strong><br>
+  Straight over SSH: browsing, editing, commands and tests all happen on the remote machine — with nothing installed there.
 </p>
 
 <p align="center">
@@ -13,9 +13,10 @@
 
 <p align="center">
   <a href="README.md">简体中文</a> · English ·
-  <a href="#quick-start">Quick start</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#three-steps-to-start">Three steps to start</a> ·
   <a href="#remote-workspaces">Remote workspaces</a> ·
-  <a href="#security-boundary">Security</a>
+  <a href="#faq">FAQ</a>
 </p>
 
 <p align="center">
@@ -26,91 +27,144 @@
   <img src="截图2.png" alt="Developing in a remote SSH workspace like a local environment" width="100%">
 </p>
 
-## What is it?
+## What is it
 
-DeepSeek Harness Remote Dev is an SSH remote-development plugin: connect to any reachable SSH server and add its remote directory directly to a DeepSeek Harness workspace. Like VS Code Remote Development, Claude Code, or Codex remote workflows, the interface runs locally while files, commands, and tests run on the remote machine.
+An **SSH remote development plugin** for DeepSeek Harness. Connect to any machine you can SSH into and add one of its directories as a workspace — every session you start there runs `read` / `write` / `edit` / `glob` / `grep` / `bash` **inside that directory on that machine**.
 
-You do not need to install any service on the remote server. The target only needs an SSH server and a login account; Node.js, DeepSeek Harness, and this plugin run on your local machine.
+The experience matches VS Code Remote Development: the UI and the model run locally, the files and commands run remotely.
 
-## Highlights
+The remote machine needs **nothing installed** — just an SSH server and an account you can log in with.
 
-- **Direct SSH access** for Linux, macOS, WSL, and Windows targets.
-- **Local-development experience**: after choosing a remote directory, read, write, edit, glob, grep, and bash operate remotely by default.
-- **First-class Web UI** for adding, testing, editing, connecting to, and browsing remote machines.
-- **Password or key authentication** with explicit private-key paths and host-key verification.
-- **AI-native tools** such as remote_connect, remote_exec, remote_read, remote_write, and remote_list for ad-hoc tasks.
+## Install
 
-## Quick start
-
-Run these commands from your DeepSeek Harness project root:
+### Option 1: one command (recommended)
 
 ~~~sh
-# Recommended: install and register the plugin through pnpm
-pnpm dsh plugin --profile web add dsh-remote-dev
+npx dsh-remote-dev@latest setup
+~~~
 
-# If dsh is installed as a global command
+Installs into the `web` profile; add `--profile headless` for another one.
+
+The installer prepares the profile directory, records the pnpm build policy, installs, registers the plugin, and verifies it took effect. It is idempotent — after a failed install, run it again to repair.
+
+### Option 2: install with the dsh command
+
+First add two lines to `~/.dsh/profiles/web/pnpm-workspace.yaml`:
+
+~~~yaml
+allowBuilds:
+  ssh2: false
+  cpu-features: false
+~~~
+
+Then install as usual:
+
+~~~sh
+pnpm dsh plugin --profile web add dsh-remote-dev
+# or, with dsh installed globally:
 dsh plugin --profile web add dsh-remote-dev
 ~~~
 
-### Connect a machine
+**What are those two lines for?** This plugin depends on `ssh2`, which carries two **optional** native build scripts (its own `install`, plus node-gyp for the optional `cpu-features`). pnpm 11 fails the entire install over any build script you have not decided about (`ERR_PNPM_IGNORED_BUILDS`). Neither build is needed — ssh2 is a pure JavaScript client that falls back to Node's own crypto — so denying them is the right answer, and it means no C++ toolchain is required. Option 1 does exactly this.
 
-1. Open **Settings → Remote Connections**.
-2. Enter the host, port, username, and authentication method, then select **Test connection** and save.
-3. Choose **Add workspace → Remote machines** and pick a remote directory.
+> Want the native accelerator anyway? `npx dsh-remote-dev@latest setup --allow-native` (needs a C++ toolchain).
 
-The directory appears as an ordinary workspace in the sidebar. Sessions created under it automatically use the remote filesystem and shell.
+## Three steps to start
+
+1. Start DeepSeek Harness (`dsh --profile web`), open **Settings → Remote Connections**, enter host, port, username and authentication, select **Test connection**, and save.
+2. In the sidebar choose **Add workspace → Remote machines**, pick the machine, browse to the directory, and confirm.
+3. The directory appears as a workspace (`app [SSH: buildbox]`). Start a session under it and begin.
 
 ## Remote workspaces
 
-Remote workspaces are the main workflow:
+This is the main way to use the plugin. In every session under a remote workspace:
 
-- the remote directory appears as a normal sidebar workspace, such as app [SSH: buildbox];
-- read, write, edit, glob, and grep operate on remote files through SFTP;
-- bash runs over SSH with the remote directory as its default working directory;
-- relative paths resolve remotely, so the host path is not exposed to the model;
-- personas, AGENTS.md, skills, todos, plans, and subagents remain available.
+- `read` / `write` / `edit` / `glob` / `grep` operate on remote files over SFTP;
+- `bash` runs commands over SSH inside the remote directory;
+- relative paths resolve against the remote directory and `{{cwd}}` shows it, so the local path never leaks into the model's reasoning;
+- persona, AGENTS.md, skills, todos, plan mode and subagents **all remain** — the remote preset is derived from your default preset, not reduced to a handful of tools;
+- reopening an old session returns to the same remote environment.
 
-For a one-off command, use the remote_* tools directly without creating a workspace.
+Local workspaces are untouched.
 
-## Model tools
+## What you get
+
+| Capability | Detail |
+| --- | --- |
+| Remote workspaces | A remote directory as a workspace; files and commands run there |
+| Connection manager | Add, test, edit, connect and browse machines from Settings |
+| Authentication | Password, private key, key passphrase; host fingerprint pinned on first connect |
+| Directory browser | Built-in SFTP browser with breadcrumbs and keyboard support |
+| Platforms | Linux, macOS, WSL and Windows SSH servers |
+
+For one-off remote work without creating a workspace, the model can call these tools directly:
 
 | Tool | Purpose |
 | --- | --- |
-| remote_status | View saved profiles, state, platform, and recent errors |
-| remote_connect | Connect a saved profile or one-off host |
-| remote_disconnect | Close a connection |
-| remote_exec | Run a command over SSH |
-| remote_read / remote_write | Read or write UTF-8 text over SFTP |
-| remote_list | Browse a remote directory over SFTP |
+| `remote_status` | List profiles, states, platforms and recent errors |
+| `remote_connect` / `remote_disconnect` | Open or close a connection |
+| `remote_exec` | Run a command over SSH |
+| `remote_read` / `remote_write` | Read and write UTF-8 text over SFTP |
+| `remote_list` | Browse a remote directory over SFTP |
+
+## FAQ
+
+### Install fails with `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: cpu-features@0.0.10, ssh2@1.17.0`
+
+pnpm 11 refuses to skip a dependency's build scripts silently and exits with a **failure**, so `dsh` never registers the plugin in `dsh.profile.bundles` — the package is downloaded but never loaded.
+
+Run the installer once to repair it (it turns the pending placeholders pnpm wrote into an explicit `false`, reinstalls, and registers the bundle):
+
+~~~sh
+npx dsh-remote-dev@latest setup
+~~~
+
+Or set both entries under `allowBuilds` in `~/.dsh/profiles/web/pnpm-workspace.yaml` to `false` by hand and run the install command again.
+
+### After installing this plugin, installing **other** plugins fails the same way
+
+Same cause: pnpm re-evaluates the whole profile's dependency graph on every install, so as long as `ssh2` is in it and undecided, every install fails. Once `allowBuilds` is written, every plugin in that profile installs normally again.
+
+### Installed, but there is no "Remote Connections" in Settings
+
+Check that `dsh.profile.bundles` in `~/.dsh/profiles/<name>/package.json` contains `dsh-remote-dev`. If it does not, the install failed halfway — run the installer again.
+
+### Other checks
+
+~~~sh
+npx dsh-remote-dev@latest setup --dry-run   # show the changes without making them
+npx dsh-remote-dev@latest setup --help      # all options
+~~~
 
 ## Security boundary
 
-- SSH host fingerprints are recorded on first connect and checked later;
-- credentials stay in the DeepSeek Harness credential store and are never echoed to the browser;
-- commands run with the permissions of the SSH account;
-- a bound directory defines workspace behavior, not an operating-system sandbox;
-- use a dedicated account, container, or VM for high-risk work.
+- The first connection pins and verifies the SSH host fingerprint; a mismatch fails closed.
+- Passwords and key passphrases live in the DeepSeek Harness credential store and are never echoed to the browser.
+- Remote commands carry the permissions of that SSH account.
+- A bound directory is workspace semantics, **not** an OS sandbox.
+- For risky work, use a dedicated account, a container, or a VM.
 
 ## Local development
 
 ~~~sh
 npm ci
-npm run test:offline
-npm run check
-npm run package:check
+npm run test:offline     # tests that need no SSH server
+npm run check            # syntax check
+npm run package:check    # pack and install into a clean consumer
 ~~~
 
 Install the checkout into a Web profile:
 
 ~~~sh
-dsh plugin --profile web add ./packages/remote-ssh
+./scripts/install.sh     # same as: setup --package ./packages/remote-ssh
 ~~~
 
-More information:
+## More
 
 - [Remote development design](docs/remote-development-design.md)
-- [npm and GitHub publishing](docs/PUBLISHING.md)
-- [Handover notes](docs/HANDOVER.md)
+- [Publishing guide](docs/PUBLISHING.md)
+- [Maintainer handover](docs/HANDOVER.md)
 - [Changelog](CHANGELOG.md)
 - [MIT License](LICENSE)
 
+A community-maintained plugin, not an official DeepSeek AI product.

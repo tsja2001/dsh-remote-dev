@@ -24,16 +24,38 @@
 
 ## Install
 
-This is a [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) bundle. Install it through the `dsh` plugin manager:
+This is a [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) bundle. One command
+installs and registers it:
 
 ~~~sh
-dsh plugin --profile web add dsh-remote-dev
-dsh --profile web
+npx dsh-remote-dev@latest setup          # --profile web by default
 ~~~
 
-Using DeepSeek Harness through `npx`? Prefix both commands with `npx @deepseek-ai/dsh`.
+Then start the Harness (`dsh --profile web`), open **Settings → Remote Connections**, add a
+password or private-key profile, select **Test connection**, save, and connect.
 
-Open **Settings → Remote Connections**, add a password or private-key profile, select **Test connection**, save, and connect.
+<details>
+<summary>What the installer does, and how to do it by hand</summary>
+
+`dsh plugin add` forwards to pnpm, and pnpm 11 fails an install whose dependency tree contains any
+package with a build script (`ERR_PNPM_IGNORED_BUILDS`) — after which `dsh` never registers the
+bundle, so the plugin is downloaded but never loaded. The only dependency here, `ssh2`, ships two
+OPTIONAL native build scripts (its own `install`, and node-gyp for `cpu-features`); ssh2 is a pure
+JavaScript SSH client that falls back to Node's crypto, so both are denied — no compiler needed.
+
+The installer records that decision in the profile, runs the install, and verifies the result:
+
+~~~yaml
+# ~/.dsh/profiles/web/pnpm-workspace.yaml
+allowBuilds:
+  ssh2: false
+  cpu-features: false
+~~~
+
+With those two lines in place, `dsh plugin --profile web add dsh-remote-dev` works directly.
+Options: `--profile <name>`, `--package <spec>`, `--dsh "<command>"`, `--allow-native`,
+`--dry-run`, `--help`.
+</details>
 
 ## Remote workspaces
 
@@ -105,7 +127,7 @@ The bundle automatically contributes tool guidance to the DeepSeek Harness syste
 
 ## Requirements and limits
 
-- Node.js 18+
+- Node.js 18+ (no C++ toolchain: the optional native ssh2 accelerator is deliberately not built)
 - DeepSeek Harness developer preview
 - A reachable SSH/SFTP target using password or explicit private-key authentication
 - UTF-8 text file reads and writes; binary transfer is not yet exposed as a model tool

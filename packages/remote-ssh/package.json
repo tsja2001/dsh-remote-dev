@@ -1,12 +1,16 @@
 {
   "name": "dsh-remote-dev",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "DeepSeek Harness SSH plugin for AI remote development: run commands and read, write, or browse files on Linux and Windows servers.",
   "type": "module",
   "main": "./index.js",
+  "bin": {
+    "dsh-remote-dev": "./setup.js"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./setup": "./setup.js",
     "./transport": "./transport.js",
     "./profiles": "./profiles.js",
     "./tools": "./tools.js",
@@ -21,6 +25,7 @@
   },
   "files": [
     "index.js",
+    "setup.js",
     "transport.js",
     "profiles.js",
     "tools.js",
@@ -37,7 +42,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check transport.js && node --check profiles.js && node --check tools.js && node --check presets.js && node --check workspaces.js && node --check world-support.js && node --check remote-fs.js && node --check remote-shell.js && node --check remote-context.js && node --check client.js",
+    "check": "node --check index.js && node --check transport.js && node --check profiles.js && node --check tools.js && node --check presets.js && node --check workspaces.js && node --check world-support.js && node --check remote-fs.js && node --check remote-shell.js && node --check remote-context.js && node --check client.js && node --check setup.js",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run check"
   },

@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote-root",
   "private": false,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Development and release workspace for the DeepSeek Harness Remote SSH plugin.",
   "type": "module",
   "packageManager": "npm@10.9.8",
@@ -12,8 +12,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node scripts/test-workspaces.js && node scripts/test-ssh2.js && node scripts/test-manager.js && node scripts/test-world.js",
-    "test:offline": "node scripts/test-workspaces.js",
+    "test": "node scripts/test-setup.js && node scripts/test-workspaces.js && node scripts/test-ssh2.js && node scripts/test-manager.js && node scripts/test-world.js",
+    "test:offline": "node scripts/test-setup.js && node scripts/test-workspaces.js",
     "check": "npm --prefix packages/remote-ssh run check",
     "package:check": "node scripts/check-package.js",
     "release:check": "npm test && npm run package:check"
@@ -26,5 +26,8 @@
   "homepage": "https://github.com/tsja2001/dsh-remote-dev#readme",
   "bugs": {
     "url": "https://github.com/tsja2001/dsh-remote-dev/issues"
+  },
+  "dependencies": {
+    "dsh-remote-dev": "^9.9.9"
   }
 }
