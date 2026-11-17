@@ -32,7 +32,9 @@ DSH_TEST_NO_PASSWORD=1 DSH_TEST_KEY=$HOME/.ssh/id_ed25519 npm test
 
 两个测试面：`scripts/test-ssh2.js`（传输层）与 `scripts/test-manager.js`（管理器/存储语义）。CI（`.github/workflows/ci.yml`）在 GitHub Actions 里用同样方式跑。
 
-`npm run package:check` 会把待发布包打成 tarball，在全新的临时项目中安装，再实际导入主入口和 SSH 传输入口。它用于拦截“源码开发正常、发布包缺少运行时依赖”一类问题。
+`npm run test:offline` 还包含当前 DSH 核心接口的工具、文件系统、Shell、进程及预设契约测试。`npm run package:check` 会把待发布包打成 tarball，在全新的临时项目中检查没有自动安装宿主核心包，再提供匹配宿主接口，验证重装不替换核心包且公开入口可导入。
+
+已安装 macOS Desktop 的开发者可设置 `DSH_HOST_APP='/Applications/DeepSeek Harness.app'` 后运行 `npm run test:host` 和 `npm run test:installed-profile`，分别验证实际宿主接口与生产 profile 解析器。隔离 SSH 夹具、运行条件和已知限制见 [DSH 0.2.2 兼容性说明](docs/DSH-0.2.2-COMPATIBILITY.md)。
 
 改传输层（`transport.js`）或存储语义（`profiles.js`）前，请先确认本地 `npm test` 绿。
 

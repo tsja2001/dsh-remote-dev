@@ -5,7 +5,7 @@
  * exposes one shared RPC method table through both bridges the runtime
  * provides — the dynamic-plugin `harness.handle` surface and a JSON HTTP API
  * on `ctx.webServer` (`/dsh-remote/api/*`, same-origin only) — and registers
- * the remote_* model tools.
+ * the remote_dev_* model tools.
  *
  * @module dsh-remote-dev
  */
@@ -14,7 +14,7 @@ import { deleteProfile, loadProfiles, resetFingerprint, saveProfiles, upsertProf
 import { RemoteConnection, classifyError } from './transport.js'
 import { applyRemoteTools } from './tools.js'
 import { RemoteWorkspaces, workspaceRpc } from './workspaces.js'
-import { MANAGER_KEY } from './world-support.js'
+import { MANAGER_KEY, waitForSignal } from './world-support.js'
 
 /** Strip secrets from a stored profile before it crosses an RPC boundary. */
 function publicProfile(p, displayName) {
@@ -72,9 +72,16 @@ function credentialSecretStore(credentials) {
 
 /** Profile store + live connection table shared by tools, RPC, and UI. */
 export class RemoteManager {
-	constructor() {
+	constructor({ Connection = RemoteConnection } = {}) {
+		this.Connection = Connection
+		this.openingControls = new Map()
+		this.deleted = new Set()
 		/** profileId -> RemoteConnection (only live connections). */
 		this.connections = new Map()
+		/** Connections being prepared belong to this service until publication. */
+		this.connecting = new Set()
+		this.acquiring = new Map()
+		this.lifecycle = new AbortController()
 		/** profileId -> last classified error (survives connection removal). */
 		this.lastErrors = new Map()
 		/** profileId -> {count, windowStart} bounded auto-reconnect budget. */
@@ -129,6 +136,7 @@ export class RemoteManager {
 	async saveProfile(input) {
 		if (this.secrets.mode === 'credentials') {
 			const saved = upsertProfile({ ...input, password: '', passphrase: '' })
+			this.deleted.delete(saved.id)
 			if (input.password) await this.secrets.set(saved.id, 'password', input.password)
 			if (input.auth === 'key' && input.passphrase) await this.secrets.set(saved.id, 'passphrase', input.passphrase)
 			if (input.auth === 'password') await this.secrets.unset(saved.id, 'passphrase')
@@ -137,10 +145,12 @@ export class RemoteManager {
 			return publicProfile(fresh, this.displayName(fresh))
 		}
 		const saved = upsertProfile(input)
+		this.deleted.delete(saved.id)
 		return publicProfile(saved, this.displayName(saved))
 	}
 
 	async deleteProfile(id) {
+		this.deleted.add(id)
 		await this.disconnect(id)
 		if (this.secrets.mode === 'credentials') {
 			await this.secrets.unset(id, 'password')
@@ -172,39 +182,66 @@ export class RemoteManager {
 		return true
 	}
 
-	/** Open one connection; wires lifecycle state into the manager tables. */
-	async openConnection(profile) {
-		const resolved = await this.resolveSecrets(profile)
-		const conn = new RemoteConnection(resolved, {
-			onState: (state, err) => {
-				if (state === 'connected') {
-					this.lastErrors.delete(profile.id)
-				} else if (state === 'closed' && err) {
-					this.lastErrors.set(profile.id, err)
-					if (this.connections.get(profile.id) === conn) this.connections.delete(profile.id)
-				}
-			},
-		})
-		await conn.connect()
-		this.connections.set(profile.id, conn)
-		this.reconnects.delete(profile.id)
-		// Host-key TOFU: pin the fingerprint observed on first connect.
-		if (!profile.hostFingerprint && conn.fingerprint) {
-			try {
-				upsertProfile({ ...profile, hostFingerprint: conn.fingerprint })
-			} catch {
-				/* pinning is best-effort; verification still happens next time */
+	/** Open one connection; only the latest, still-authorized attempt may publish. */
+	async openConnection(profile, { signal } = {}) {
+		signal?.throwIfAborted()
+		this.lifecycle.signal.throwIfAborted()
+		if (this.deleted.has(profile.id)) throw new Error(`profile was deleted: ${profile.id}`)
+		this.openingControls.get(profile.id)?.abort(new Error('remote connection superseded'))
+		const owner = new AbortController()
+		this.openingControls.set(profile.id, owner)
+		const signals = [owner.signal, this.lifecycle.signal, ...(signal ? [signal] : [])]
+		const control = AbortSignal.any(signals)
+		let conn
+		try {
+			const resolved = await waitForSignal(this.resolveSecrets(profile), control)
+			control.throwIfAborted()
+			conn = new this.Connection(resolved, {
+				onState: (state, err) => {
+					if (state === 'connected' && !control.aborted) {
+						this.lastErrors.delete(profile.id)
+					} else if (state === 'closed' && err && this.connections.get(profile.id) === conn) {
+						this.lastErrors.set(profile.id, err)
+						this.connections.delete(profile.id)
+					}
+				},
+			})
+			this.connecting.add(conn)
+			await waitForSignal(conn.connect({ signal: control }), control)
+			control.throwIfAborted()
+			if (this.openingControls.get(profile.id) !== owner || this.deleted.has(profile.id)) {
+				throw new Error('remote connection superseded or profile deleted')
 			}
+			const previous = this.connections.get(profile.id)
+			if (previous && previous !== conn) previous.close()
+			this.connections.set(profile.id, conn)
+			this.reconnects.delete(profile.id)
+			// Pin only an existing, unchanged profile. A late handshake must never
+			// recreate a deleted profile or overwrite edits made during connection.
+			const fresh = loadProfiles().find(entry => entry.id === profile.id)
+			if (fresh && !fresh.hostFingerprint && conn.fingerprint
+				&& fresh.host === profile.host && fresh.port === profile.port && fresh.user === profile.user) {
+				try { upsertProfile({ ...fresh, hostFingerprint: conn.fingerprint }) }
+				catch { /* pinning is best-effort; verification still happens next time */ }
+			}
+			return conn
+		} catch (error) {
+			conn?.close()
+			throw error
+		} finally {
+			if (conn) this.connecting.delete(conn)
+			if (this.openingControls.get(profile.id) === owner) this.openingControls.delete(profile.id)
 		}
-		return conn
 	}
 
 	/** Connect one stored profile by id. */
-	async connect(id) {
+	async connect(id, { signal } = {}) {
+		signal?.throwIfAborted()
 		const profile = loadProfiles().find((p) => p.id === id)
 		if (!profile) throw new Error(`profile not found: ${id}`)
-		await this.disconnect(id)
-		await this.openConnection(profile)
+		this.disconnect(id)
+		signal?.throwIfAborted()
+		await this.openConnection(profile, { signal })
 		const fresh = loadProfiles().find((p) => p.id === id) || profile
 		return this.statusOf(fresh)
 	}
@@ -214,23 +251,28 @@ export class RemoteManager {
 	 * Used by the preset world plugins (they need the transport object itself,
 	 * not the status snapshot that connect() returns).
 	 */
-	async connection(id) {
-		const profile = loadProfiles().find((p) => p.id === id)
-		if (!profile) throw new Error(`profile not found: ${id}`)
-		let conn = this.connections.get(id)
-		if (!conn || conn.state !== 'connected') {
-			await this.disconnect(id)
-			await this.openConnection(profile)
-			conn = this.connections.get(id)
+	async connection(id, { signal } = {}) {
+		signal?.throwIfAborted()
+		this.lifecycle.signal.throwIfAborted()
+		const conn = this.connections.get(id)
+		if (conn?.state === 'connected') return conn
+		if (!this.acquiring.has(id)) {
+			const profile = loadProfiles().find((p) => p.id === id)
+			if (!profile) throw new Error(`profile not found: ${id}`)
+			const work = this.openConnection(profile).finally(() => {
+				if (this.acquiring.get(id) === work) this.acquiring.delete(id)
+			})
+			this.acquiring.set(id, work)
 		}
-		return conn
+		return waitForSignal(this.acquiring.get(id), signal)
 	}
 
 	/** Connect ad-hoc (tool path): stored profile or inline host/user/auth. */
-	async connectAdhoc(args) {
-		if (args.profile) return this.connect(args.profile)
+	async connectAdhoc(args, { signal } = {}) {
+		signal?.throwIfAborted()
+		if (args.profile) return this.connect(args.profile, { signal })
 		if (!args.host || !args.user) {
-			throw new Error('remote_connect needs a stored profile id, or host+user for an ad-hoc connection')
+			throw new Error('remote_dev_connect needs a stored profile id, or host+user for an ad-hoc connection')
 		}
 		const profile = {
 			id: `adhoc-${args.host}-${args.user}`,
@@ -243,8 +285,9 @@ export class RemoteManager {
 			keyPath: args.key_path || '',
 			passphrase: args.passphrase || '',
 		}
-		await this.disconnect(profile.id)
-		await this.openConnection(profile)
+		this.disconnect(profile.id)
+		signal?.throwIfAborted()
+		await this.openConnection(profile, { signal })
 		return this.statusOf(profile)
 	}
 
@@ -252,16 +295,19 @@ export class RemoteManager {
 	 * Get a live connection for profile id, self-healing at most once with the
 	 * stored credentials when the previous connection dropped.
 	 */
-	async require(id) {
+	async require(id, { signal } = {}) {
+		signal?.throwIfAborted()
+		this.lifecycle.signal.throwIfAborted()
 		const conn = this.connections.get(id)
 		if (conn && conn.state === 'connected') return conn
 		const profile = loadProfiles().find((p) => p.id === id)
 		if (!profile) throw new Error(`profile not found: ${id}`)
-		if (this.canReconnect(id)) {
+		if (this.acquiring.has(id) || this.canReconnect(id)) {
 			try {
-				await this.connect(id)
-				return this.connections.get(id)
+				return await this.connection(id, { signal })
 			} catch (err) {
+				signal?.throwIfAborted()
+				this.lifecycle.signal.throwIfAborted()
 				const last = err.classified || this.lastErrors.get(id)
 				throw new Error(
 					`profile is not connected: ${id} — ${last ? `${last.code}: ${last.en}` : err.message}`,
@@ -269,7 +315,7 @@ export class RemoteManager {
 			}
 		}
 		const last = this.lastErrors.get(id)
-		throw new Error(`profile is not connected: ${id} — ${last ? `${last.code}: ${last.en}` : 'run remote_connect first'}`)
+		throw new Error(`profile is not connected: ${id} — ${last ? `${last.code}: ${last.en}` : 'run remote_dev_connect first'}`)
 	}
 
 	/** Test connectivity without keeping the connection open. */
@@ -331,7 +377,10 @@ export class RemoteManager {
 		}
 	}
 
-	async disconnect(id) {
+	disconnect(id) {
+		this.openingControls.get(id)?.abort(new Error('remote connection disconnected'))
+		this.openingControls.delete(id)
+		this.acquiring.delete(id)
 		const conn = this.connections.get(id)
 		if (conn) {
 			conn.close()
@@ -370,7 +419,7 @@ export class RemoteManager {
 		}
 		let conn = this.connections.get(profile.id)
 		if (!conn || conn.state !== 'connected') {
-			await this.disconnect(profile.id)
+			this.disconnect(profile.id)
 			await this.openConnection(profile)
 			conn = this.connections.get(profile.id)
 			conn.autoOpened = true
@@ -398,8 +447,8 @@ export class RemoteManager {
 	/**
 	 * Persist the remote working directory picked in the workspace directory
 	 * flow. The binding is what makes a session develop on the remote: the
-	 * system prompt advertises it and the remote_* tools resolve relative
-	 * paths (and remote_exec's default cwd) against it.
+	 * system prompt advertises it and the remote_dev_* tools resolve relative
+	 * paths (and remote_dev_exec's default cwd) against it.
 	 */
 	bind(id, path) {
 		const profiles = loadProfiles()
@@ -430,14 +479,14 @@ export class RemoteManager {
 
 	/**
 	 * Prefix one shell command with a cd into the profile's bound directory
-	 * (remote_exec's default working directory). Profiles without a binding
+	 * (remote_dev_exec's default working directory). Profiles without a binding
 	 * run the command unchanged.
 	 */
 	withDefaultCwd(id, command, platform) {
 		const p = loadProfiles().find((x) => x.id === id)
 		if (!p?.bindPath) return command
 		const dir = p.bindPath
-		if (platform === 'win32') return 'cd /d "' + dir.replace(/"/g, '""') + '" && ' + command
+		if (platform === 'windows' || platform === 'win32') return 'cd /d "' + dir.replace(/"/g, '""') + '" && ' + command
 		return "cd '" + dir.replace(/'/g, "'\\''") + "' && " + command
 	}
 
@@ -481,8 +530,14 @@ export class RemoteManager {
 	}
 
 	closeAll() {
+		this.lifecycle.abort(new Error('remote-ssh manager disposed'))
+		for (const control of this.openingControls.values()) control.abort(this.lifecycle.signal.reason)
+		this.openingControls.clear()
+		for (const conn of this.connecting) conn.close()
 		for (const conn of this.connections.values()) conn.close()
+		this.connecting.clear()
 		this.connections.clear()
+		this.acquiring.clear()
 		this.lastErrors.clear()
 	}
 }
@@ -636,7 +691,7 @@ export function applyHttpBridge(ctx, manager, workspaces) {
 	})
 }
 
-export function apply(ctx) {
+export async function apply(ctx) {
 	const manager = new RemoteManager()
 
 	// Publish the manager for the world plugins (remote-fs/remote-shell)
@@ -645,12 +700,17 @@ export function apply(ctx) {
 	// Before any wiring below, because an already-available service makes
 	// `ctx.inject` fire during that call.
 	globalThis[MANAGER_KEY] = manager
+	// Register cleanup before asynchronous preset initialization can fail.
+	ctx.effect(() => () => {
+		if (globalThis[MANAGER_KEY] === manager) delete globalThis[MANAGER_KEY]
+		manager.closeAll()
+	})
 
 	// Remote workspaces: sidebar rows whose sessions run on the remote machine.
 	// Wiring is service-optional, so a headless or preset-less composition keeps
-	// working with the standalone remote_* tools alone.
+	// working with the standalone remote_dev_* tools alone.
 	const workspaces = new RemoteWorkspaces({ manager })
-	workspaces.attach(ctx)
+	await workspaces.attach(ctx)
 	const table = rpcTable(manager, workspaces)
 
 	// Package-private RPC consumed by the browser UI (client.js). `harness` is
@@ -671,9 +731,4 @@ export function apply(ctx) {
 	applyHttpBridge(ctx, manager, workspaces)
 	applyRemoteTools(ctx, manager)
 
-	// Close every connection when the plugin unloads.
-	ctx.effect(() => () => {
-		if (globalThis[MANAGER_KEY] === manager) delete globalThis[MANAGER_KEY]
-		manager.closeAll()
-	})
 }

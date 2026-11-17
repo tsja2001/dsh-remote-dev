@@ -23,6 +23,7 @@ const target = {
 }
 const PASSWORD = process.env.DSH_TEST_PASSWORD || 'test1234'
 const NO_PASSWORD = process.env.DSH_TEST_NO_PASSWORD === '1' // server without password auth
+const TEST_FILE = process.env.DSH_TEST_FILE || '/tmp/dsh-remote-test.txt'
 let failed = 0
 
 function check(label, ok, extra = '') {
@@ -63,8 +64,8 @@ if (NO_PASSWORD) {
 		return list.slice(firstFile).every((e) => e.type !== 'directory')
 	})())
 
-	await pw.writeFile('/tmp/dsh-remote-test.txt', 'hello remote world\n')
-	const readBack = await pw.readFile('/tmp/dsh-remote-test.txt')
+	await pw.writeFile(TEST_FILE, 'hello remote world\n')
+	const readBack = await pw.readFile(TEST_FILE)
 	check('sftp write+read', readBack.trim() === 'hello remote world', readBack.trim())
 
 	const home = await pw.home()
@@ -106,8 +107,8 @@ if (!existsSync(keyPath)) {
 		const list = await key.listDir('/')
 		check('sftp list /', Array.isArray(list) && list.length > 0, `${list.length} entries`)
 		check('list entries carry mtime', list.every((e) => e.mtime === null || typeof e.mtime === 'number'))
-		await key.writeFile('/tmp/dsh-remote-test.txt', 'hello remote world\n')
-		const readBack = await key.readFile('/tmp/dsh-remote-test.txt')
+		await key.writeFile(TEST_FILE, 'hello remote world\n')
+		const readBack = await key.readFile(TEST_FILE)
 		check('sftp write+read', readBack.trim() === 'hello remote world', readBack.trim())
 		const home = await key.home()
 		check('sftp home()', typeof home === 'string' && home.startsWith('/'), home)

@@ -34,7 +34,7 @@ window.__ModuleLoader__.load({
 		const DICT = {
 			zh: {
 				nav: '远程连接', title: 'SSH 远程连接',
-				intro: '配置通过 SSH 访问的远程设备（密码或密钥认证），连接后即可在会话中用 remote_exec / remote_read / remote_write / remote_list 工具操作远端。',
+				intro: '配置通过 SSH 访问的远程设备（密码或密钥认证），连接后即可在会话中用 remote_dev_exec / remote_dev_read / remote_dev_write / remote_dev_list 工具操作远端。',
 				name: '名称', namePh: '留空自动使用 user@host',
 				host: '主机 / IP', hostPh: '192.168.1.10 或 example.com',
 				port: '端口', user: '用户名', auth: '认证方式',
@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
 				wflowConnecting: '正在连接 {name}…', wflowChoose: '选择此目录',
 				wflowBound: '已绑定远程工作目录：{ref}',
 				wflowWorkspace: '远程工作区「{title}」已创建，正在打开会话…',
-				wflowNoPresets: '工作区已创建，但当前组合没有 agent 预设名册，会话无法切换到远程执行世界——请在带预设的组合（标准 Web/CLI）中使用，或改用 remote_* 工具。',
+				wflowNoPresets: '工作区已创建，但当前组合没有 agent 预设名册，会话无法切换到远程执行世界——请在带预设的组合（标准 Web/CLI）中使用，或改用 remote_dev_* 工具。',
 				wflowHint: '选择目录即在左侧工作区栏添加一个远程工作区：在它下面新建的每个会话，read/write/edit/glob/grep/bash 都直接运行在这台远程机器的该目录里，和本地工作区用法完全一样。',
 				wsTitle: '远程工作区', wsNone: '还没有远程工作区——在左侧工作区栏点击「添加工作区」，切到「远程机器」即可创建。',
 				wsIntro: '每个远程工作区在侧边栏就是一个普通工作区；它下面的会话，文件与命令都跑在远程机器上。',
@@ -88,7 +88,7 @@ window.__ModuleLoader__.load({
 			},
 			en: {
 				nav: 'Remote Connections', title: 'SSH Remote Connections',
-				intro: 'Configure devices reachable over SSH (password or key auth). Once connected, the remote_exec / remote_read / remote_write / remote_list tools operate on the remote machine in your sessions.',
+				intro: 'Configure devices reachable over SSH (password or key auth). Once connected, the remote_dev_exec / remote_dev_read / remote_dev_write / remote_dev_list tools operate on the remote machine in your sessions.',
 				name: 'Name', namePh: 'defaults to user@host',
 				host: 'Host / IP', hostPh: '192.168.1.10 or example.com',
 				port: 'Port', user: 'Username', auth: 'Authentication',
@@ -127,7 +127,7 @@ window.__ModuleLoader__.load({
 				wflowConnecting: 'Connecting to {name}…', wflowChoose: 'Choose this directory',
 				wflowBound: 'Bound remote working directory: {ref}',
 				wflowWorkspace: 'Remote workspace “{title}” created — opening a session…',
-				wflowNoPresets: 'Workspace created, but this composition has no agent-preset roster, so sessions cannot switch to the remote world. Use a composition with presets (standard Web/CLI), or use the remote_* tools instead.',
+				wflowNoPresets: 'Workspace created, but this composition has no agent-preset roster, so sessions cannot switch to the remote world. Use a composition with presets (standard Web/CLI), or use the remote_dev_* tools instead.',
 				wflowHint: 'Choosing a directory adds a remote workspace to the sidebar. Every session you start under it runs read/write/edit/glob/grep/bash inside that directory on the remote machine — exactly like a local workspace.',
 				wsTitle: 'Remote workspaces', wsNone: 'No remote workspaces yet — use “Add workspace” in the sidebar and switch to the Remote machines tab.',
 				wsIntro: 'Each remote workspace is an ordinary sidebar workspace; every session under it runs its files and commands on the remote machine.',
@@ -781,7 +781,7 @@ window.__ModuleLoader__.load({
 		 * tab embeds the shipped browse dialog untouched (plus a small chip to
 		 * switch to remote); the remote tab lists the configured machines,
 		 * connects on demand, browses remote directories, and binds the pick
-		 * as the session remote working context (remote_* tools honor it).
+		 * as the session remote working context (remote_dev_* tools honor it).
 		 */
 		function WorkspaceDirectoryFlow(props) {
 			const lang = useLang()

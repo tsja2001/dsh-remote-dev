@@ -19,6 +19,7 @@
     "./world-support": "./world-support.js",
     "./remote-fs": "./remote-fs.js",
     "./remote-shell": "./remote-shell.js",
+    "./remote-subprocess": "./remote-subprocess.js",
     "./remote-context": "./remote-context.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
@@ -34,6 +35,7 @@
     "world-support.js",
     "remote-fs.js",
     "remote-shell.js",
+    "remote-subprocess.js",
     "remote-context.js",
     "client.js",
     "cordis.patch.yml",
@@ -42,14 +44,15 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check transport.js && node --check profiles.js && node --check tools.js && node --check presets.js && node --check workspaces.js && node --check world-support.js && node --check remote-fs.js && node --check remote-shell.js && node --check remote-context.js && node --check client.js && node --check setup.js",
+    "check": "node --check index.js && node --check transport.js && node --check profiles.js && node --check tools.js && node --check presets.js && node --check workspaces.js && node --check world-support.js && node --check remote-fs.js && node --check remote-shell.js && node --check remote-subprocess.js && node --check remote-context.js && node --check client.js && node --check setup.js",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run check"
   },
   "license": "MIT",
   "author": "tsja",
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "dsh": "0.2.2-rc.3"
   },
   "keywords": [
     "deepseek",
@@ -82,8 +85,23 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
+    "js-yaml": "^4.3.2",
+    "zod": "^4.0.0",
     "ssh2": "^1.17.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis-plugin-include": "1.1.0",
+    "@deepseek-ai/dsh-fs": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-fs-patch": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis-plugin-include": { "optional": true },
+    "@deepseek-ai/dsh-fs": { "optional": true },
+    "@deepseek-ai/dsh-fs-patch": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true }
   },
   "dsh": {
     "bundle": {

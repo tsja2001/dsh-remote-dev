@@ -34,6 +34,17 @@ export function winQuote(value) {
 	return '"' + String(value).replaceAll('"', '""') + '"'
 }
 
+/** Await shared service-owned work without cancelling another caller's connection. */
+export function waitForSignal(work, signal) {
+	if (!signal) return Promise.resolve(work)
+	signal.throwIfAborted()
+	return new Promise((resolve, reject) => {
+		const abort = () => reject(signal.reason)
+		signal.addEventListener('abort', abort, { once: true })
+		Promise.resolve(work).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+	})
+}
+
 /**
  * Build the per-world support object shared by remote-fs and remote-shell.
  *
@@ -47,6 +58,12 @@ export function worldSupport(_ctx, config = {}) {
 	let platformCache = null
 	let acquiring = null
 	const support = {
+		get profileId() {
+			return profileId
+		},
+		get anchor() {
+			return String(config.anchor || '')
+		},
 		get root() {
 			return root
 		},
@@ -54,7 +71,8 @@ export function worldSupport(_ctx, config = {}) {
 			return platformCache
 		},
 		/** Acquire the shared connection, auto-connecting when needed. */
-		async acquire(reason) {
+		async acquire(reason, { signal } = {}) {
+			signal?.throwIfAborted()
 			if (!acquiring) {
 				acquiring = hostManager()
 				// manager.connection(id) returns the live RemoteConnection
@@ -69,7 +87,7 @@ export function worldSupport(_ctx, config = {}) {
 					acquiring = null
 				})
 			}
-			return acquiring
+			return waitForSignal(acquiring, signal)
 		},
 		/** Best-effort platform without connecting (defaults posix). */
 		async platformOf(conn) {

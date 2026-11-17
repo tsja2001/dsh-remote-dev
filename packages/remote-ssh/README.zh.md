@@ -2,6 +2,10 @@
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) 提供 AI 原生 SSH 远程开发能力：把远程机器上的目录直接添加为工作区，在它下面新建会话开发，和本地工作区完全一样；远端无需安装 Agent。
 
+## 兼容性
+
+本分支适配 **DSH 0.2.2-rc.3**，核心包由宿主提供，不作为普通依赖安装。完整远程工作区面向 POSIX，标准 glob/grep 要求远端 PATH 中已有 `rg`；缺失会报错，不回退本机。Windows 保留独立 remote_dev_* 工具和 SFTP；工作区进程、PTY、控制通道与原始输出 spill 暂未适配。取消关闭所属 SSH 通道，不能证明远端整个进程树已退出。SFTP 外部修改检测受服务器时间戳精度限制。
+
 ## 安装
 
 一条命令装好：
@@ -43,7 +47,7 @@ header 的 `cwd` 分组），因此 `remote://` 永远不可能成为工作区�
 移除远程工作区只删除侧边栏条目并保留生成的预设（这样历史会话仍能打开）；如需彻底清理，在
 **设置 → 远程连接** 的移除确认里勾选「同时删除生成的预设」。
 
-插件提供 `remote_status`、`remote_connect`、`remote_disconnect`、`remote_exec`、`remote_read`、`remote_write` 与 `remote_list` 七个模型工具，并包含连接管理、SFTP 目录浏览、主机指纹固定、凭据保护、受限重连、错误分类和中英双语界面。
+插件提供 `remote_dev_status`、`remote_dev_connect`、`remote_dev_disconnect`、`remote_dev_exec`、`remote_dev_read`、`remote_dev_write` 与 `remote_dev_list` 七个模型工具，并包含连接管理、SFTP 目录浏览、主机指纹固定、凭据保护、受限重连、错误分类和中英双语界面。
 
 完整使用说明、安全模型、Windows 指南与本地测试方法请阅读仓库的[中文 README](https://github.com/tsja2001/dsh-remote-dev/blob/main/README.zh.md)。
 

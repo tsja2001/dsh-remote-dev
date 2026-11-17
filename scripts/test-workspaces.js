@@ -1,425 +1,144 @@
-/**
- * Remote-workspace validation: preset derivation, the record store, workspace
- * registration, and the automatic composition hook.
- *
- * No SSH server and no harness process are needed — the harness services this
- * plugin talks to (`workspaceRegistry`, `agentPresets`, the cordis context)
- * are stood in for by doubles that mirror their published contracts.
- *
- * YAML validity of the generated compositions is checked with js-yaml when one
- * can be found (the harness ships it); set DSH_TEST_JS_YAML to a js-yaml ESM
- * entry to pin it. Without one, those checks report as SKIP.
- *
- * Usage: node scripts/test-workspaces.js
- */
-
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+/** Offline tests against the DSH 0.2.2 readDocument/register contract. */
+import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, realpathSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
+import { join } from 'node:path'
+import { dump, load } from 'js-yaml'
+import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import {
-	ensureRemotePreset, fallbackBaseComposition, listRemotePresets, presetIdFor,
-	presetNeedsRefresh, renderComposition, transformBaseComposition,
+	ensureRemotePreset, GENERATOR_VERSION, listRemotePresets, LOCAL_WORLD_ROWS, parseComposition,
+	presetIdFor, presetNeedsRefresh, readRemotePresetDefinition, REALM_SERVICES, renderComposition,
+	transformBaseComposition,
 } from '../packages/remote-ssh/presets.js'
 import {
 	loadRecords, RemoteWorkspaces, saveRecords, titleFor, workspaceRpc,
 } from '../packages/remote-ssh/workspaces.js'
 
-let pass = 0
-let fail = 0
-let skip = 0
-function ok(label, cond, extra) {
-	if (cond) {
-		pass += 1
-		console.log('PASS', label)
-	} else {
-		fail += 1
-		console.log('FAIL', label, extra === undefined ? '' : JSON.stringify(extra, null, 2).slice(0, 800))
-	}
-}
-function skipped(label, why) {
-	skip += 1
-	console.log('SKIP', label, '-', why)
-}
-
-const HOME = mkdtempSync(join(tmpdir(), 'dsh-remote-ws-'))
-process.env.DSH_HOME = HOME
-const here = dirname(fileURLToPath(import.meta.url))
-
-/* ── YAML loader (optional) ─────────────────────────────────────────────── */
-
-async function loadYaml() {
-	const candidates = [
-		process.env.DSH_TEST_JS_YAML,
-		'js-yaml',
-		'/home/t/projects/deepseek-harness/node_modules/js-yaml/dist/js-yaml.mjs',
-		join(here, '../node_modules/js-yaml/dist/js-yaml.mjs'),
-	].filter(Boolean)
-	for (const candidate of candidates) {
-		try {
-			const mod = await import(candidate)
-			const yaml = mod.default || mod
-			if (typeof yaml.load === 'function') return yaml
-		} catch {
-			/* try the next candidate */
-		}
-	}
-	return null
-}
-const yaml = await loadYaml()
-/** The loader's dialect: `!!js` scalars are expression nodes, not errors. */
-const schema = yaml
-	? yaml.JSON_SCHEMA.extend(new yaml.Type('tag:yaml.org,2002:js', {
-		kind: 'scalar',
-		resolve: data => typeof data === 'string',
-		construct: data => ({ __jsExpr: data }),
-	}))
-	: null
-const parse = text => yaml.load(text, { schema })
-
-/* ── fixtures ───────────────────────────────────────────────────────────── */
-
-const STANDARD = [
-	'# a shipped-looking base',
-	'- id: persona',
-	"  name: '@deepseek-ai/dsh-persona'",
-	'  config:',
-	'    text: >-',
-	'      You are a coding agent. Your working directory is {{cwd}}.',
-	'- id: tool-bash',
-	"  name: '@deepseek-ai/dsh-tool-bash'",
-	"  disabled: !!js process.platform === 'win32'",
-	'- id: tool-fs',
-	"  name: '@deepseek-ai/dsh-tool-fs'",
-	'- id: planning',
-	'  name: cordis:group',
-	'  group: true',
-	'  isolate:',
-	'    planMode: true',
-	'  config:',
-	'    - id: plan-mode',
-	"      name: '@deepseek-ai/dsh-plan-mode'",
-	'      config:',
-	'        section: |',
-	'          Stay in plan mode.',
-	'',
-].join('\n')
-
-const MINIMAL = [
-	'- id: persona',
-	"  name: '@deepseek-ai/dsh-persona'",
-	'- id: persistent-shell',
-	'  name: cordis:group',
-	'  group: true',
-	'  isolate:',
-	'    terminals: true',
-	'  config:',
-	'    - id: pty',
-	"      name: '@deepseek-ai/dsh-terminal'",
-	'    - id: terminal-bash',
-	"      name: '@deepseek-ai/dsh-terminal-bash'",
-	'    - id: persistent-bash',
-	"      name: '@deepseek-ai/dsh-tool-bash-persistent'",
-	'      config:',
-	'        timeoutMs: 300000',
-	'- id: filesystem',
-	'  name: cordis:group',
-	'  group: true',
-	'  isolate:',
-	'    fs: true',
-	'  config:',
-	'    - id: fs-local',
-	"      name: '@deepseek-ai/dsh-fs-local'",
-	'      config:',
-	'        cwd: !!js process.cwd()',
-	'    - id: str-replace-editor',
-	"      name: '@deepseek-ai/dsh-tool-str-replace-editor'",
-	"- name: '@deepseek-ai/dsh-bash-local'",
-	'  disabled: false',
-	'  config:',
-	'    shell: bash',
-	'- id: local-row',
-	"  name: './local-plugin.js'",
-	'- id: flow-isolate',
-	'  name: cordis:group',
-	'  group: true',
-	'  isolate: { fs: true, workflowEngine: true }',
-	'  config:',
-	'    - id: inner',
-	"      name: '@deepseek-ai/dsh-tool-workflow'",
-	'',
-].join('\n')
-
-/* ── 1. base transformation ─────────────────────────────────────────────── */
-
-const keptStandard = transformBaseComposition(STANDARD, { baseDir: '/base' })
-ok('standard base needs no rewriting', keptStandard.ok && keptStandard.text === STANDARD, keptStandard.notes)
-
-const rewritten = transformBaseComposition(MINIMAL, { baseDir: '/base/preset' })
-ok('minimal base transforms', rewritten.ok === true, rewritten.reason)
-const lines = rewritten.text.split('\n')
-ok('fs isolate key removed', !/^\s*fs:\s*true\s*$/m.test(rewritten.text), rewritten.text)
-// The `filesystem` group isolated fs alone, so its whole realm header goes;
-// the `terminals` block and the inline flow realm are the two that remain.
-ok('emptied isolate header removed', rewritten.text.split('isolate:').length - 1 === 2, rewritten.text)
-ok('unrelated isolate realm kept', /^\s*terminals:\s*true\s*$/m.test(rewritten.text))
-ok(
-	'inline isolate keeps its other realms',
-	/isolate: \{ workflowEngine: true \}/.test(rewritten.text),
-	rewritten.text,
-)
-for (const local of ['dsh-fs-local', 'dsh-terminal-bash', 'dsh-tool-bash-persistent']) {
-	const index = lines.findIndex(line => line.includes(local))
-	ok(`${local} disabled`, index >= 0 && lines[index + 2]?.trim() === 'disabled: true', lines.slice(index, index + 3))
-}
-ok('consumer of the isolated fs kept', rewritten.text.includes('dsh-tool-str-replace-editor'))
-// `- name:` puts the row's keys two columns right of the dash; the rewrite has
-// to disable it there and drop the row's own `disabled: false`.
-const inlineName = lines.findIndex(line => line.includes('dsh-bash-local'))
-ok('a `- name:` row is disabled at the right column',
-	lines[inlineName + 1]?.trim().startsWith('# dsh-remote-ssh')
-	&& lines[inlineName + 2] === '  disabled: true'
-	&& lines[inlineName + 3] === '  config:',
-	lines.slice(inlineName, inlineName + 5))
-ok('terminals registry row kept enabled', /name: '@deepseek-ai\/dsh-terminal'\n(?!.*disabled)/.test(rewritten.text + '\n'))
-ok(
-	'relative row absolutized',
-	rewritten.text.includes("name: '/base/preset/local-plugin.js'"),
-	rewritten.text,
-)
-ok('config of a disabled row survives', rewritten.text.includes('__CFG__') === false && rewritten.text.includes('timeoutMs: 300000'))
-
-ok('tabs refuse the shift', transformBaseComposition('- id: x\n\tname: y\n').ok === false)
-ok('multi-document refuses the shift', transformBaseComposition('---\n- id: x\n').ok === false)
-
-/* ── 2. rendered composition ────────────────────────────────────────────── */
-
-const composition = renderComposition({
-	profileId: 'p1',
-	root: '/srv/app',
-	label: 'buildbox',
-	target: 'remote://dev@buildbox:22/srv/app',
-	baseText: rewritten.text,
-	baseId: 'minimal',
-	notes: rewritten.notes,
-})
-
-if (!yaml) {
-	skipped('composition parses as an entry list', 'js-yaml not found')
-	skipped('composition structure', 'js-yaml not found')
-} else {
-	let rows = null
+const HOME = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-remote-ws-')))
+let passed = 0
+let failed = 0
+async function test(name, run) {
 	try {
-		rows = parse(composition)
+		await run()
+		passed++
+		console.log('PASS', name)
 	} catch (error) {
-		ok('composition parses as an entry list', false, String(error))
-	}
-	if (rows) {
-		ok('composition parses as an entry list', Array.isArray(rows) && rows.length === 1)
-		const group = rows[0]
-		ok('one isolate group', group.name === 'cordis:group' && group.group === true)
-		ok('realm owns fs and shell', group.isolate?.fs === true && group.isolate?.shell === true, group.isolate)
-		const ids = group.config.map(row => row.id)
-		ok('world rows come first', ids.slice(0, 3).join() === 'remote-fs,remote-shell,remote-context', ids)
-		ok('base rows are nested inside the realm', ids.includes('persona') && ids.includes('filesystem'), ids)
-		const worldRow = group.config[0]
-		ok('world row is baked with the binding', worldRow.config.profile === 'p1' && worldRow.config.root === '/srv/app')
-		ok('world row points at this package', worldRow.name.endsWith('remote-fs.js') && worldRow.name.startsWith('/'))
-		const filesystem = group.config.find(row => row.id === 'filesystem')
-		ok('nested group no longer isolates fs', filesystem.isolate === undefined, filesystem.isolate)
-		ok('local fs provider disabled', filesystem.config.find(row => row.id === 'fs-local').disabled === true)
-		ok('js expressions survive', filesystem.config[0].config.cwd.__jsExpr === 'process.cwd()')
-		const flow = group.config.find(row => row.id === 'flow-isolate')
-		ok('inline isolate keeps other realms', flow.isolate?.workflowEngine === true && flow.isolate?.fs === undefined)
-	}
-
-	const fallback = renderComposition({ profileId: 'p1', root: '/srv/app', baseText: fallbackBaseComposition() })
-	let fallbackRows = null
-	try {
-		fallbackRows = parse(fallback)
-	} catch (error) {
-		ok('built-in base parses', false, String(error))
-	}
-	if (fallbackRows) {
-		ok('built-in base parses', fallbackRows[0].config.some(row => row.id === 'tool-fs'))
-	}
-
-	// The real shipped presets, when this checkout sits beside a harness.
-	const harnessPresets = process.env.DSH_TEST_PRESET_ROOT
-		|| '/home/t/projects/deepseek-harness/apps/cli/config/agent-presets'
-	for (const name of ['standard', 'minimal', 'code']) {
-		const file = join(harnessPresets, name, 'agent.cordis.yml')
-		if (!existsSync(file)) {
-			skipped(`shipped preset "${name}" round-trips`, 'harness checkout not found')
-			continue
-		}
-		const text = readFileSync(file, 'utf8')
-		const shifted = transformBaseComposition(text, { baseDir: dirname(file) })
-		if (!shifted.ok) {
-			ok(`shipped preset "${name}" round-trips`, false, shifted.reason)
-			continue
-		}
-		let parsed = null
-		let generated = null
-		try {
-			generated = renderComposition({
-				profileId: 'p1', root: '/srv/app', label: 'box', baseText: shifted.text, baseId: name,
-			})
-			parsed = parse(generated)
-		} catch (error) {
-			ok(`shipped preset "${name}" round-trips`, false, String(error))
-			continue
-		}
-		const original = parse(text)
-		const nested = parsed[0].config.slice(3)
-		ok(
-			`shipped preset "${name}" round-trips`,
-			nested.length === original.length && nested.every((row, index) => row.id === original[index].id),
-			{ nested: nested.map(r => r.id), original: original.map(r => r.id) },
-		)
+		failed++
+		console.error('FAIL', name, error)
 	}
 }
-
-/* ── 3. preset authoring ────────────────────────────────────────────────── */
-
-const base = { id: 'standard', path: '/base/standard/agent.cordis.yml', text: STANDARD }
-const authored = await ensureRemotePreset({
-	home: HOME, profileId: 'p1', profileName: 'buildbox', root: '/srv/app',
-	target: 'remote://dev@buildbox:22/srv/app', base,
-})
-ok('preset id is derived from profile+root', authored.presetId === presetIdFor('p1', '/srv/app'))
-ok('preset was written', authored.wrote === true && existsSync(join(authored.directory, 'agent.cordis.yml')))
-ok('metadata names the machine', readFileSync(join(authored.directory, 'preset.yml'), 'utf8').includes('[SSH: buildbox]'))
-const again = await ensureRemotePreset({
-	home: HOME, profileId: 'p1', profileName: 'buildbox', root: '/srv/app',
-	target: 'remote://dev@buildbox:22/srv/app', base,
-})
-ok('re-authoring is a no-op', again.wrote === false)
-ok('fresh preset is not stale', (await presetNeedsRefresh({ home: HOME, presetId: authored.presetId, base })) === false)
-ok(
-	'a changed base makes it stale',
-	(await presetNeedsRefresh({ home: HOME, presetId: authored.presetId, base: { ...base, text: STANDARD + '\n# edit\n' } })) === true,
-)
-ok('listing reports the binding', (await listRemotePresets({ home: HOME })).some(
-	entry => entry.presetId === authored.presetId && entry.profile === 'p1' && entry.root === '/srv/app',
-))
-
-/* ── 3b. the harness's own roster health check ──────────────────────────── */
-
-// The strongest available check without a running host: hand the generated
-// files to the real `discoverPresets` and require that the roster reports no
-// `broken` reason — it parses with the loader's own YAML dialect and applies
-// the same row-shape validation a mount begins with.
-const harnessLib = process.env.DSH_TEST_HARNESS_LIB
-	|| '/home/t/projects/deepseek-harness/packages/preset/agent-presets/lib/index.js'
-const presetRoot = process.env.DSH_TEST_PRESET_ROOT
-	|| '/home/t/projects/deepseek-harness/apps/cli/config/agent-presets'
-let discoverPresets = null
-try {
-	({ discoverPresets } = await import(harnessLib))
-} catch {
-	discoverPresets = null
-}
-if (!discoverPresets) {
-	skipped('the harness roster accepts the generated presets', 'harness build not found')
-} else {
-	const rosterHome = mkdtempSync(join(tmpdir(), 'dsh-remote-roster-'))
-	const wanted = []
-	for (const name of ['standard', 'minimal', 'code']) {
-		const file = join(presetRoot, name, 'agent.cordis.yml')
-		if (!existsSync(file)) continue
-		const authored = await ensureRemotePreset({
-			home: rosterHome, profileId: 'p1', profileName: 'buildbox', root: '/srv/app/' + name,
-			target: 'remote://dev@buildbox:22/srv/app/' + name,
-			base: { id: name, path: file, text: readFileSync(file, 'utf8') },
-		})
-		wanted.push(authored.presetId)
-	}
-	if (!wanted.length) {
-		skipped('the harness roster accepts the generated presets', 'shipped presets not found')
-	} else {
-		const roster = await discoverPresets([{ path: join(rosterHome, '.agent-presets'), trust: 'user' }])
-		const mine = roster.filter(entry => wanted.includes(entry.id))
-		ok('the harness roster accepts the generated presets',
-			mine.length === wanted.length && mine.every(entry => entry.broken === undefined),
-			mine.map(entry => ({ id: entry.id, broken: entry.broken })))
-		ok('the roster shows the workspace name', mine.every(entry => / \[SSH: buildbox\]$/.test(entry.name || '')),
-			mine.map(entry => entry.name))
-	}
-	await rm(rosterHome, { recursive: true, force: true })
-}
-
-/* ── 4. doubles for the harness services ────────────────────────────────── */
-
-class FakeWorkspace {
-	constructor(id, path, title) {
-		this.id = id
-		this.path = path
-		this.title = title
-	}
-
-	async setTitle(title) {
-		this.title = title
-	}
-}
+const parse = text => load(text, { schema: entryListSchema })
+const STANDARD = `- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are a coding agent. Your working directory is {{cwd}}.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+`
+const COMPLEX = `- id: literal
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |
+      isolate:
+        fs: true
+      - name: '@deepseek-ai/dsh-subprocess-local'
+      name: './not-a-plugin.js'
+    nested: {name: './also-not-a-plugin', isolate: {fs: true}}
+    expression: !!js ctx.fs.root
+    quoted: 'name: # literal value'
+- id: providers
+  name: cordis:group
+  group: true
+  isolate: { 'fs': true, "shell": true, subprocess: true, workingDirectory: true, planMode: true }
+  config:
+    - 'name': '@deepseek-ai/dsh-subprocess-local' # quoted row key and trailing comment
+      disabled: !!js false
+    - name: '@deepseek-ai/dsh-working-directory'
+      config: { initial: !!js process.cwd() }
+    - name: '@deepseek-ai/dsh-fs-local'
+    - name: '@deepseek-ai/dsh-tool-fs-search'
+- name: cordis:group
+  group: true
+  isolate:
+    'fs': true
+    subprocess: true
+    workingDirectory: true
+  config:
+    - name: '@deepseek-ai/dsh-tool-todo'
+`
 
 class FakeRegistry {
-	constructor() {
-		this.rows = []
-		this.seq = 0
-	}
-
+	rows = []
+	seq = 0
 	async create(path, title) {
-		if (!existsSync(path)) throw new Error(`ENOENT: ${path}`)
-		const existing = this.rows.find(row => row.path === path)
-		if (existing) return existing
-		this.seq += 1
-		const row = new FakeWorkspace(`ws-${this.seq}`, path, title || path.split('/').at(-1))
-		this.rows.push(row)
+		assert.ok(existsSync(path))
+		let row = this.rows.find(item => item.path === path)
+		if (!row) {
+			row = { id: `ws-${++this.seq}`, path, title, async setTitle(value) { this.title = value } }
+			this.rows.push(row)
+		}
 		return row
 	}
-
-	list() {
-		return [...this.rows]
-	}
-
-	async delete(id) {
-		const before = this.rows.length
-		this.rows = this.rows.filter(row => row.id !== id)
-		return this.rows.length !== before
-	}
+	list() { return [...this.rows] }
+	async delete(id) { this.rows = this.rows.filter(row => row.id !== id) }
 }
 
+/** No path field and no disk discovery: only register() installs a preset. */
 class FakePresets {
-	constructor(presets, defaultId) {
-		this.presets = presets
-		this.defaultId = defaultId
-		this.composed = new Map()
-		this.recomposed = []
+	defaultId = 'standard'
+	documents = new Map([['standard', STANDARD]])
+	definitions = new Map()
+	bindings = new Map()
+	registrations = []
+	disposals = []
+	recomposed = []
+	failRecompose = null
+	beforeRegister = null
+	async readDocument(id) {
+		const content = this.documents.get(id)
+		if (content === undefined) throw new Error(`unknown preset ${id}`)
+		return { agentPreset: id, content }
 	}
-
-	async list() {
-		return this.presets
-	}
-
-	async resolve(id) {
-		const wanted = id || this.defaultId
-		const found = this.presets.find(preset => preset.id === wanted)
-		if (!found) throw new Error(`unknown preset ${wanted}`)
-		return found
-	}
-
-	composedPreset(agentCtx) {
-		return this.composed.get(agentCtx)
-	}
-
-	async recompose(agentCtx, id) {
-		if (!existsSync(join(HOME, '.agent-presets', id, 'agent.cordis.yml'))) {
-			throw new Error(`preset "${id}" has no composition on disk`)
+	async register(definition) {
+		assert.ok(!this.definitions.has(definition.id), 'duplicate runtime registration')
+		const group = definition.plugins[0]
+		assert.equal(group.name, 'cordis:group')
+		assert.deepEqual(Object.keys(group.isolate), REALM_SERVICES)
+		const remoteRows = group.config.slice(0, 4)
+		assert.deepEqual(remoteRows.map(row => row.id), ['remote-fs', 'remote-shell', 'remote-subprocess', 'remote-context'])
+		const config = remoteRows[0].config
+		const generation = { definition, services: Object.fromEntries(REALM_SERVICES.map(name => [name,
+			{ profileId: config.profile, root: config.root }])) }
+		this.definitions.set(definition.id, generation)
+		this.registrations.push(definition.id)
+		await this.beforeRegister?.(definition)
+		let disposed = false
+		return async () => {
+			if (disposed) return
+			disposed = true
+			this.disposals.push(definition.id)
+			if (this.definitions.get(definition.id) === generation) this.definitions.delete(definition.id)
 		}
-		this.composed.set(agentCtx, id)
+	}
+	async resolve(id = this.defaultId) {
+		if (!this.documents.has(id) && !this.definitions.has(id)) throw new Error(`unknown preset ${id}`)
+		return { id }
+	}
+	async list() { return [...this.documents.keys(), ...this.definitions.keys()].map(id => ({ id })) }
+	composedPreset(ctx) { return this.bindings.get(ctx)?.definition.id }
+	serviceFor(agent, name) { return this.bindings.get(agent.ctx)?.services[name] }
+	async recompose(ctx, id) {
+		if (this.failRecompose) throw this.failRecompose
+		const generation = this.definitions.get(id)
+		if (!generation) throw new Error(`preset ${id} is not registered`)
+		this.bindings.set(ctx, generation)
 		this.recomposed.push(id)
 		return { id }
 	}
@@ -428,175 +147,324 @@ class FakePresets {
 const manager = {
 	bound: [],
 	statusAll: () => [
-		{ id: 'p1', name: 'buildbox', host: 'buildbox', port: 22, user: 'dev' },
-		{ id: 'p2', name: 'edge', host: 'edge.example', port: 2222, user: 'ops' },
+		{ id: 'p1', name: 'buildbox', user: 'dev', host: 'buildbox', port: 22 },
+		{ id: 'p2', name: 'edge', user: 'ops', host: 'edge.example', port: 2222 },
 	],
-	bind(id, path) {
-		this.bound.push([id, path])
-	},
+	bind(id, root) { this.bound.push([id, root]) },
 }
-
-const basePresetDir = join(HOME, 'shipped', 'standard')
-await mkdir(basePresetDir, { recursive: true })
-await writeFile(join(basePresetDir, 'agent.cordis.yml'), STANDARD, 'utf8')
-const presets = new FakePresets(
-	[{ id: 'standard', path: join(basePresetDir, 'agent.cordis.yml') }],
-	'standard',
-)
-
-const workspaces = new RemoteWorkspaces({ manager })
-workspaces.registry = new FakeRegistry()
-workspaces.presets = presets
-
-/* ── 5. creating a remote workspace ─────────────────────────────────────── */
-
-const record = await workspaces.create({ profileId: 'p1', root: '/srv/app' })
-ok('anchor is created', existsSync(record.anchor))
-ok('anchor carries a marker', existsSync(join(record.anchor, '.dsh-remote-workspace.json')))
-ok('anchor lives under the plugin home', record.anchor.startsWith(join(HOME, 'remote-workspaces')), record.anchor)
-ok('anchor is named after machine and directory', record.anchor.includes('buildbox') && record.anchor.includes('app-'))
-ok('record is persisted', loadRecords(HOME).some(entry => entry.id === record.id))
-ok('workspace row is registered', record.workspaceId === 'ws-1')
-ok('row is titled like VS Code', workspaces.registry.rows[0].title === titleFor({ root: '/srv/app', label: 'buildbox' }))
-ok('preset was derived from the base', record.baseId === 'standard')
-ok('remote_* tools follow the same directory', manager.bound.some(([id, path]) => id === 'p1' && path === '/srv/app'))
-
-const same = await workspaces.create({ profileId: 'p1', root: '/srv/app' })
-ok('creating twice is idempotent', same.id === record.id && workspaces.registry.rows.length === 1)
-ok('record list holds one row per binding', loadRecords(HOME).filter(entry => entry.id === record.id).length === 1)
-
-const second = await workspaces.create({ profileId: 'p2', root: '/srv/app' })
-ok('same directory on another machine is a second workspace', second.anchor !== record.anchor && second.workspaceId === 'ws-2')
-
-ok('unknown machine refuses', await workspaces.create({ profileId: 'nope', root: '/x' }).then(() => false, () => true))
-ok('missing directory refuses', await workspaces.create({ profileId: 'p1', root: '  ' }).then(() => false, () => true))
-
-/* ── 6. automatic composition ───────────────────────────────────────────── */
-
-function fakeAgent(id, cwd) {
+function instance(home = HOME, presets = new FakePresets()) {
+	const value = new RemoteWorkspaces({ manager, home: () => home })
+	value.presets = presets
+	value.registry = new FakeRegistry()
+	return value
+}
+function agent(id, cwd) {
 	const events = []
-	return {
-		id,
-		ctx: { agent: id },
-		session: { header: { cwd }, append: (type, data) => events.push({ type, data }) },
-		events,
+	return { id, ctx: {}, session: { header: { cwd }, append(type, data) { events.push({ type, data }) } }, events }
+}
+function context(services = {}) {
+	const listeners = new Map()
+	const disposers = []
+	const tasks = []
+	const warnings = []
+	const ctx = {
+		...services, listeners, warnings,
+		logger: { warn(message) { warnings.push(message) } },
+		effect(run) { const dispose = run(); if (dispose) disposers.push(dispose); return dispose },
+		on(event, handler) {
+			const handlers = listeners.get(event) || []
+			handlers.push(handler); listeners.set(event, handlers)
+			return () => listeners.set(event, handlers.filter(item => item !== handler))
+		},
+		inject(names, apply) { if (names.every(name => ctx[name])) tasks.push(Promise.resolve(apply(ctx))) },
+		async ready() { await Promise.all(tasks) },
+		async serial(event, payload) { for (const listener of listeners.get(event) || []) await listener(payload) },
+		async step(subject, next) {
+			let dispatch = next
+			for (const listener of [...(listeners.get('agent/pre-step') || [])].reverse()) {
+				const following = dispatch
+				dispatch = () => listener({ agent: subject }, following)
+			}
+			return dispatch()
+		},
+		async dispose() { for (const dispose of disposers.reverse()) await dispose() },
 	}
+	return ctx
 }
 
-const remoteAgent = fakeAgent('s1', record.anchor)
-await workspaces.composeFor(remoteAgent)
-ok('remote session is recomposed', presets.recomposed.at(-1) === record.presetId, presets.recomposed)
-ok('the choice is recorded in the log', remoteAgent.events.at(-1)?.type === 'agent-preset/selected'
-	&& remoteAgent.events.at(-1)?.data.agentPreset === record.presetId, remoteAgent.events)
+try {
+	await test('host YAML schema preserves expressions, literal config and quoted/flow entries', async () => {
+		const before = parse(COMPLEX)
+		const result = await transformBaseComposition(COMPLEX)
+		assert.equal(result.ok, true, result.reason)
+		const after = parse(result.text)
+		assert.deepEqual(after[0], before[0])
+		assert.deepEqual(after[1].isolate, { planMode: true })
+		assert.equal(after[2].isolate, undefined)
+		assert.ok(after[1].config.slice(0, 3).every(row => row.disabled === true))
+		assert.equal(after[1].config[3].disabled, undefined)
+		assert.deepEqual(after[1].config[1].config.initial, { __jsExpr: 'process.cwd()' })
+		assert.ok(LOCAL_WORLD_ROWS.has('@deepseek-ai/dsh-subprocess-local'))
+		assert.ok(LOCAL_WORLD_ROWS.has('@deepseek-ai/dsh-working-directory'))
+	})
+	await test('relative declarations need a real source base; unsafe includes and malformed YAML refuse', async () => {
+		const text = "- name: './local.js'\n"
+		assert.equal((await transformBaseComposition(text)).ok, false)
+		assert.equal((await transformBaseComposition(text, { baseDir: 'guess' })).ok, false)
+		assert.equal(parse((await transformBaseComposition(text, { baseDir: '/actual/preset' })).text)[0].name, '/actual/preset/local.js')
+		for (const input of ["- name: cordis:include\n  config: {path: /elsewhere.yml}", '---\n- name: x\n---\n- name: y', '- name: [broken', '- bad: shape']) {
+			assert.equal((await transformBaseComposition(input)).ok, false, input)
+		}
+	})
+	await test('renderer owns four services and bakes an explicit local anchor into every provider', async () => {
+		const rewritten = await transformBaseComposition(COMPLEX)
+		const [group] = await parseComposition(renderComposition({ profileId: 'p1', root: '/srv/app', anchor: '/local/anchor', baseText: rewritten.text }))
+		assert.deepEqual(group.isolate, Object.fromEntries(REALM_SERVICES.map(name => [name, true])))
+		assert.deepEqual(group.config.slice(0, 4).map(row => row.id), ['remote-fs', 'remote-shell', 'remote-subprocess', 'remote-context'])
+		for (const row of group.config.slice(0, 4)) {
+			assert.equal(row.config.anchor, '/local/anchor')
+			assert.equal(row.config.profile, 'p1')
+			assert.equal(row.config.root, '/srv/app')
+			assert.ok(row.name.startsWith('/'))
+		}
+	})
+	await test('authoring is idempotent, stamped, readable as a runtime definition, and drift-aware', async () => {
+		const base = { id: 'standard', text: STANDARD }
+		const options = { home: HOME, profileId: 'author', profileName: "build'box", root: '/srv/app', base }
+		const first = await ensureRemotePreset(options)
+		assert.equal(first.wrote, true)
+		assert.equal((await ensureRemotePreset(options)).wrote, false)
+		assert.equal(await presetNeedsRefresh({ home: HOME, presetId: first.presetId, base }), false)
+		assert.equal(await presetNeedsRefresh({ home: HOME, presetId: first.presetId, base: { ...base, text: STANDARD + '\n# changed' } }), true)
+		const definition = await readRemotePresetDefinition({ home: HOME, presetId: first.presetId })
+		assert.equal(definition.id, first.presetId)
+		assert.ok(definition.name.includes("build'box"))
+		assert.deepEqual(definition.plugins[0].config[5].disabled, { __jsExpr: "process.platform === 'win32'" })
+		const stamp = JSON.parse(await readFile(join(first.directory, 'source.json'), 'utf8'))
+		assert.equal(stamp.generator, GENERATOR_VERSION)
+		await rm(first.directory, { recursive: true, force: true })
+	})
 
-const localAgent = fakeAgent('s2', join(HOME, 'somewhere-local'))
-ok('local session is untouched', workspaces.composeFor(localAgent) === undefined)
-
-const resumed = fakeAgent('s3', record.anchor)
-presets.composed.set(resumed.ctx, record.presetId)
-ok('an already-composed session is left alone', workspaces.composeFor(resumed) === undefined)
-
-const noCwd = fakeAgent('s4', undefined)
-ok('a session without cwd is ignored', workspaces.composeFor(noCwd) === undefined)
-
-// A failing recomposition must never escape into the agent lifecycle.
-const brokenRecord = { ...record, presetId: 'remote-ssh-missing-00000000', title: 'broken' }
-const warnings = []
-workspaces.ctx = { logger: { warn: message => warnings.push(message) } }
-const brokenAgent = fakeAgent('s5', record.anchor)
-const savedRecords = loadRecords(HOME)
-saveRecords([brokenRecord], HOME)
-await workspaces.composeFor(brokenAgent)
-ok('a broken preset degrades to a warning', warnings.length === 1 && warnings[0].includes('remote-ssh-missing'), warnings)
-saveRecords(savedRecords, HOME)
-
-/* ── 7. attach wiring ───────────────────────────────────────────────────── */
-
-const disposers = []
-const listeners = new Map()
-const fakeCtx = {
-	logger: { warn: message => warnings.push(message) },
-	inject(names, apply) {
-		const child = { ...fakeCtx, workspaceRegistry: workspaces.registry, agentPresets: presets }
-		child.effect = fakeCtx.effect
-		child.on = fakeCtx.on
-		if (names.every(name => child[name] !== undefined)) apply(child)
-	},
-	effect(run) {
-		const dispose = run()
-		disposers.push(dispose)
-		return dispose
-	},
-	on(event, handler) {
-		listeners.set(event, handler)
-		return () => listeners.delete(event)
-	},
+	const workspaces = instance()
+	const presets = workspaces.presets
+	let record
+	await test('create registers parsed plugins through readDocument/register and adopts the anchor', async () => {
+		record = await workspaces.create({ profileId: 'p1', root: '/srv/app' })
+		assert.ok(existsSync(join(record.anchor, '.dsh-remote-workspace.json')))
+		assert.equal(record.presetId, presetIdFor('p1', '/srv/app'))
+		assert.equal(record.baseId, 'standard')
+		assert.equal(record.composable, true)
+		assert.ok(presets.definitions.has(record.presetId))
+		assert.equal(workspaces.registry.rows[0].title, titleFor({ root: '/srv/app', label: 'buildbox' }))
+		assert.ok(manager.bound.some(([id, root]) => id === 'p1' && root === '/srv/app'))
+		const same = await workspaces.create({ profileId: 'p1', root: '/srv/app' })
+		assert.equal(same.id, record.id)
+		assert.equal(workspaces.registry.rows.length, 1)
+		assert.equal(presets.registrations.length, 1)
+		assert.equal(loadRecords(HOME).length, 1)
+	})
+	await test('invalid workspace input and unsafe runtime base leave no runnable remote preset', async () => {
+		await assert.rejects(workspaces.create({ profileId: 'missing', root: '/x' }), /unknown machine/)
+		await assert.rejects(workspaces.create({ profileId: 'p1', root: ' ' }), /directory is required/)
+		presets.documents.set('standard', "- name: './relative-plugin.js'")
+		await assert.rejects(workspaces.create({ profileId: 'p2', root: '/unsafe' }), /no published source base/)
+		assert.ok(!presets.definitions.has(presetIdFor('p2', '/unsafe')))
+		presets.documents.set('standard', STANDARD)
+	})
+	await test('composition finishes before the first tool capture and records the selected preset', async () => {
+		const subject = agent('remote', record.anchor)
+		const ctx = context({ agentPresets: presets, workspaceRegistry: workspaces.registry })
+		const wired = new RemoteWorkspaces({ manager, home: () => HOME })
+		// Release ownership before another plugin incarnation registers the same ids.
+		await workspaces.disposePresets()
+		wired.attach(ctx)
+		await ctx.ready()
+		await ctx.serial('agent/created', { agent: subject })
+		const captured = REALM_SERVICES.map(name => presets.serviceFor(subject, name))
+		assert.ok(captured.every(service => service.profileId === 'p1' && service.root === '/srv/app'))
+		assert.deepEqual(subject.events.at(-1), { type: 'agent-preset/selected', data: { agentPreset: record.presetId } })
+		let entered = false
+		await ctx.step(subject, async () => { entered = true })
+		assert.equal(entered, true)
+		const count = presets.recomposed.length
+		await ctx.serial('agent/created', { agent: subject })
+		assert.equal(presets.recomposed.length, count)
+		assert.equal(wired.pending.size, 0)
+		await ctx.dispose()
+		assert.equal(wired.presets, null)
+		assert.equal(presets.definitions.size, 0)
+	})
+	// The original service now owns a fresh incarnation of the same registry.
+	workspaces.presets = presets
+	await workspaces.reconcile()
+	await test('local sessions and sessions without cwd remain available', async () => {
+		assert.equal(workspaces.composeFor(agent('local', join(HOME, 'local'))), undefined)
+		assert.equal(workspaces.composeFor(agent('no-cwd')), undefined)
+	})
+	await test('recompose failure rejects publication and never advances to model capture', async () => {
+		presets.failRecompose = new Error('remote mount failed')
+		let captured = false
+		await assert.rejects((async () => {
+			await workspaces.composeFor(agent('broken', record.anchor))
+			captured = true
+		})(), /remote mount failed/)
+		assert.equal(captured, false)
+		assert.equal(workspaces.pending.size, 0)
+		presets.failRecompose = null
+	})
+	await test('missing or mismatched remote service fails closed and logs no successful selection', async () => {
+		for (const name of REALM_SERVICES) {
+			const subject = agent('missing-' + name, record.anchor)
+			const generation = presets.definitions.get(record.presetId)
+			const saved = generation.services[name]
+			delete generation.services[name]
+			await assert.rejects(workspaces.composeFor(subject), new RegExp('remote ' + name))
+			assert.equal(subject.events.length, 0)
+			generation.services[name] = { profileId: 'another-host', root: '/srv/app' }
+			await assert.rejects(workspaces.composeFor(agent('wrong-' + name, record.anchor)), new RegExp('remote ' + name))
+			generation.services[name] = saved
+		}
+	})
+	await test('preset service absence preserves local sessions but refuses remote anchors', async () => {
+		const standalone = new RemoteWorkspaces({ manager, home: () => HOME })
+		assert.equal(standalone.composeFor(agent('local-standalone', join(HOME, 'local'))), undefined)
+		await assert.rejects(standalone.composeFor(agent('remote-standalone', record.anchor)), /registry is unavailable/)
+	})
+	await test('base refresh replaces registration once and retains an existing agent revision', async () => {
+		const subject = agent('retained', record.anchor)
+		await workspaces.composeFor(subject)
+		const old = presets.bindings.get(subject.ctx)
+		const disposals = presets.disposals.length
+		presets.documents.set('standard', STANDARD + "- id: todo\n  name: '@deepseek-ai/dsh-tool-todo'\n")
+		await Promise.all([workspaces.refreshPreset(record), workspaces.refreshPreset(record)])
+		assert.equal(presets.disposals.length, disposals + 1)
+		assert.notEqual(presets.definitions.get(record.presetId), old)
+		assert.equal(presets.bindings.get(subject.ctx), old)
+		assert.ok(presets.definitions.get(record.presetId).definition.plugins[0].config.some(row => row.id === 'todo'))
+		await workspaces.guardRemoteAgent(subject)
+	})
+	await test('later local preset switch on a remote anchor is blocked before a model request', async () => {
+		const subject = agent('switch', record.anchor)
+		await workspaces.composeFor(subject)
+		presets.bindings.delete(subject.ctx)
+		await assert.rejects(workspaces.guardRemoteAgent(subject), /cannot bind preset/)
+	})
+	await test('reconcile restores anchor health without re-adding an operator-deleted sidebar row', async () => {
+		await rm(record.anchor, { recursive: true, force: true })
+		await workspaces.reconcile()
+		assert.ok(existsSync(record.anchor))
+		await workspaces.registry.delete(record.workspaceId)
+		await workspaces.reconcile()
+		assert.equal(workspaces.registry.rows.length, 0)
+		assert.equal(loadRecords(HOME)[0].workspaceId, undefined)
+		assert.ok(existsSync(join(HOME, '.agent-presets', record.presetId)))
+		const status = await workspaceRpc(workspaces)['remote.workspace.list']()
+		assert.equal(status.workspaces[0].registered, false)
+	})
+	await test('removal keeps historical preset and restart registers it without a workspace record', async () => {
+		await workspaces.create({ profileId: 'p1', root: '/srv/app' })
+		const result = await workspaces.remove({ id: record.id })
+		assert.equal(result.presetKept, true)
+		assert.equal(loadRecords(HOME).length, 0)
+		assert.equal((await listRemotePresets({ home: HOME })).length, 1)
+		await workspaces.disposePresets()
+		const next = new FakePresets()
+		const restarted = new RemoteWorkspaces({ manager, home: () => HOME })
+		const ctx = context({ agentPresets: next, workspaceRegistry: new FakeRegistry() })
+		restarted.attach(ctx)
+		await ctx.ready()
+		assert.ok(next.definitions.has(record.presetId))
+		assert.equal(restarted.list().length, 0)
+		assert.equal(restarted.registry.rows.length, 0)
+		const historical = agent('historical', record.anchor)
+		await ctx.serial('agent/created', { agent: historical })
+		assert.equal(next.composedPreset(historical.ctx), record.presetId)
+		const noAnchor = agent('historical-selected', join(HOME, 'elsewhere'))
+		await next.recompose(noAnchor.ctx, record.presetId)
+		await ctx.serial('agent/created', { agent: noAnchor })
+		await ctx.dispose()
+		assert.equal(next.definitions.size, 0)
+		const reloadCtx = context({ agentPresets: next })
+		restarted.attach(reloadCtx)
+		await reloadCtx.ready()
+		assert.ok(next.definitions.has(record.presetId))
+		await reloadCtx.dispose()
+	})
+	await test('explicit purge unregisters the runtime definition and deletes the canonical macOS anchor', async () => {
+		const fresh = instance()
+		const purge = await fresh.create({ profileId: 'p1', root: '/srv/app' })
+		const result = await fresh.remove({ id: purge.id, deletePreset: true })
+		assert.equal(result.presetKept, false)
+		assert.equal(fresh.presets.definitions.has(purge.presetId), false)
+		assert.equal(existsSync(join(HOME, '.agent-presets', purge.presetId)), false)
+		assert.equal(existsSync(purge.anchor), false)
+		await fresh.disposePresets()
+	})
+	await test('unload during registration waits and disposes late registration instead of leaking it', async () => {
+		const raceHome = join(HOME, 'race')
+		await mkdir(raceHome)
+		const race = instance(raceHome)
+		let release
+		let started
+		const began = new Promise(resolve => { started = resolve })
+		const barrier = new Promise(resolve => { release = resolve })
+		race.presets.beforeRegister = async () => { started(); await barrier }
+		const create = race.create({ profileId: 'p1', root: '/srv/race' })
+		await began
+		const state = race.presetState
+		const dispose = race.disposePresets()
+		release()
+		await assert.rejects(create, /unloaded during registration/)
+		await dispose
+		assert.equal(state.registrations.size, 0)
+		assert.equal(state.presets.definitions.size, 0)
+	})
+	await test('legacy historical preset upgrades when its base declaration was removed', async () => {
+		const legacyHome = join(HOME, 'legacy')
+		const legacy = instance(legacyHome)
+		legacy.presets.defaultId = 'retired-base'
+		legacy.presets.documents.set('retired-base', STANDARD + "- id: retained-feature\n  name: '@deepseek-ai/dsh-tool-todo'\n")
+		const record = await legacy.create({ profileId: 'p1', root: '/srv/legacy' })
+		const directory = join(legacyHome, '.agent-presets', record.presetId)
+		const definition = await readRemotePresetDefinition({ home: legacyHome, presetId: record.presetId })
+		const group = definition.plugins[0]
+		delete group.isolate.subprocess
+		delete group.isolate.workingDirectory
+		group.config = group.config.filter(row => row.id !== 'remote-subprocess')
+		for (const row of group.config.slice(0, 3)) delete row.config.anchor
+		await writeFile(join(directory, 'agent.cordis.yml'), dump(definition.plugins, { schema: entryListSchema }))
+		const stamp = JSON.parse(await readFile(join(directory, 'source.json'), 'utf8'))
+		stamp.generator = 3
+		delete stamp.anchor
+		delete stamp.profileName
+		delete stamp.target
+		await writeFile(join(directory, 'source.json'), JSON.stringify(stamp))
+		await legacy.remove({ id: record.id })
+		await legacy.disposePresets()
+		const restarted = instance(legacyHome)
+		await restarted.reconcile()
+		const restored = restarted.presets.definitions.get(record.presetId).definition
+		assert.ok(restored.plugins[0].config.some(row => row.id === 'retained-feature'))
+		assert.equal(restored.plugins[0].config[2].id, 'remote-subprocess')
+		assert.equal(restored.plugins[0].config[2].config.anchor, record.anchor)
+		await restarted.composeFor(agent('legacy-resume', record.anchor))
+		await restarted.disposePresets()
+	})
+	await test('orphaned anchor with a missing marker cannot silently become local', async () => {
+		const orphanHome = join(HOME, 'orphan')
+		const anchor = join(orphanHome, 'remote-workspaces', 'machine', 'directory')
+		await mkdir(anchor, { recursive: true })
+		const orphan = instance(orphanHome)
+		await assert.rejects(orphan.composeFor(agent('orphan', anchor)), /no valid persisted binding/)
+	})
+	await test('corrupt persisted binding is never registered or composed', async () => {
+		const corrupt = instance(join(HOME, 'corrupt'))
+		const record = { presetId: 'remote-ssh-mismatched-00000000', profileId: 'p1', root: '/srv/app' }
+		await assert.rejects(corrupt.refreshPreset(record), /does not match/)
+		assert.equal(corrupt.presets.registrations.length, 0)
+	})
+} finally {
+	await rm(HOME, { recursive: true, force: true })
 }
-const wired = new RemoteWorkspaces({ manager })
-wired.attach(fakeCtx)
-ok('attach picks up the registry', wired.registry === workspaces.registry)
-ok('attach picks up the preset roster', wired.presets === presets)
-ok('attach listens for new agents', listeners.has('agent/created'))
-ok('attach guards the first step', listeners.has('agent/pre-step'))
-
-const created = fakeAgent('s6', record.anchor)
-listeners.get('agent/created')({ agent: created })
-let stepped = false
-await listeners.get('agent/pre-step')({ agent: created }, async () => {
-	stepped = true
-	return { kind: 'proceed' }
-})
-ok('pre-step waits for the swap, then proceeds', stepped && presets.composedPreset(created.ctx) === record.presetId)
-
-/* ── 8. reconcile and removal ───────────────────────────────────────────── */
-
-const rpc = workspaceRpc(workspaces)
-const listed = await rpc['remote.workspace.list']()
-ok('rpc lists workspaces with health', listed.workspaces.length === 2
-	&& listed.workspaces.every(entry => entry.presetPresent === true && entry.registered === true), listed)
-
-await rm(record.anchor, { recursive: true, force: true })
-await workspaces.reconcile()
-ok('a deleted anchor is recreated', existsSync(record.anchor))
-ok('reconcile keeps the workspace id', loadRecords(HOME).find(entry => entry.id === record.id).workspaceId === record.workspaceId)
-
-// Deleting the row in the sidebar is an operator decision: the next boot must
-// not put it back, and old sessions must still find their preset.
-await workspaces.registry.delete(record.workspaceId)
-await workspaces.reconcile()
-ok('a row deleted in the sidebar stays deleted', !workspaces.registry.rows.some(row => row.path === record.anchor))
-ok('the record forgets its removed row', loadRecords(HOME).find(entry => entry.id === record.id).workspaceId === undefined)
-ok('its preset survives for old sessions', existsSync(join(HOME, '.agent-presets', record.presetId)))
-ok('list reports it as unregistered', (await rpc['remote.workspace.list']()).workspaces
-	.find(entry => entry.id === record.id).registered === false)
-
-// Re-adding the same binding restores the row without duplicating anything.
-const readded = await workspaces.create({ profileId: 'p1', root: '/srv/app' })
-ok('re-adding restores the row', readded.workspaceId !== undefined && loadRecords(HOME).length === 2)
-
-const removal = await rpc['remote.workspace.remove']({ id: record.id })
-ok('rpc removes the record', removal.removed === true && !loadRecords(HOME).some(entry => entry.id === record.id))
-ok('the workspace row is gone', !workspaces.registry.rows.some(row => row.path === record.anchor))
-ok('the preset is kept by default', removal.presetKept === true && existsSync(join(HOME, '.agent-presets', record.presetId)))
-ok('removing twice is a no-op', (await rpc['remote.workspace.remove']({ id: record.id })).removed === false)
-
-const purge = await workspaces.create({ profileId: 'p1', root: '/srv/app' })
-const purged = await rpc['remote.workspace.remove']({ id: purge.id, deletePreset: true })
-ok('an explicit purge deletes the preset', purged.presetKept === false
-	&& !existsSync(join(HOME, '.agent-presets', purge.presetId)))
-ok('an explicit purge deletes the anchor', !existsSync(purge.anchor))
-
-/* ── 9. base drift regenerates ──────────────────────────────────────────── */
-
-const drift = loadRecords(HOME).find(entry => entry.profileId === 'p2')
-const beforeText = await readFile(join(HOME, '.agent-presets', drift.presetId, 'agent.cordis.yml'), 'utf8')
-await writeFile(join(basePresetDir, 'agent.cordis.yml'), STANDARD + '\n- id: tool-todo\n  name: \'@deepseek-ai/dsh-tool-todo\'\n', 'utf8')
-await workspaces.refreshPreset(drift)
-const afterText = await readFile(join(HOME, '.agent-presets', drift.presetId, 'agent.cordis.yml'), 'utf8')
-ok('an edited base preset regenerates the remote one', afterText !== beforeText && afterText.includes('tool-todo'))
-
-/* ── done ───────────────────────────────────────────────────────────────── */
-
-await rm(HOME, { recursive: true, force: true })
-console.log(`\n${String(pass)} passed, ${String(fail)} failed, ${String(skip)} skipped`)
-process.exit(fail === 0 ? 0 : 1)
+console.log(`\n${passed} passed, ${failed} failed, 0 skipped`)
+process.exitCode = failed ? 1 : 0

@@ -1,8 +1,9 @@
-import { mkdir, rm, writeFile, readFile } from 'node:fs/promises'
+import { rm, readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { execSync } from 'node:child_process'
+import yaml from 'js-yaml'
 import { RemoteConnection } from '../packages/remote-ssh/transport.js'
-import { MANAGER_KEY } from '../packages/remote-ssh/world-support.js'
+import { MANAGER_KEY, posixQuote } from '../packages/remote-ssh/world-support.js'
 
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -26,9 +27,8 @@ const PROFILE = {
   auth: 'key', keyPath: KEY_PATH, password: '', passphrase: '',
 }
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-remote-world-'))
-const ROOT = process.env.DSH_TEST_ROOT || '/tmp/dsh-world-test'
+const ROOT = (process.env.DSH_TEST_ROOT || '/tmp').replace(/\/+$/, '') + '/dsh-world-' + randomUUID()
 
-process.on('uncaughtException', (e) => { console.log('UNCAUGHT:', e.message, '(code', e.code + ')'); })
 let pass = 0, fail = 0
 function ok(label, cond, extra) {
   if (cond) { pass++; console.log('PASS', label) }
@@ -38,8 +38,14 @@ function ok(label, cond, extra) {
 const conn = new RemoteConnection(PROFILE)
 await conn.connect()
 console.log('platform:', conn.platform)
-await rm(ROOT, { recursive: true, force: true })
-await mkdir(ROOT, { recursive: true })
+async function remote(command) {
+  const result = await conn.exec(command)
+  if (result.code !== 0) throw new Error(`remote fixture command failed: ${result.stderr}`)
+  return result.stdout
+}
+// The SSH server may be in a container: create fixtures through SSH/SFTP,
+// never through the test runner's local filesystem.
+await remote(`mkdir -p ${posixQuote(ROOT)}`)
 
 const provides = {}
 const ctx = {
@@ -49,21 +55,21 @@ const ctx = {
 globalThis[MANAGER_KEY] = { connection: async () => conn }
 
 const fsMod = await import('../packages/remote-ssh/remote-fs.js')
-fsMod.apply(ctx, { profile: 'ptest', root: ROOT })
+fsMod.apply(ctx, { profile: 'ptest', root: ROOT, anchor: '/no/such/host/dir' })
 ok('fs provided', provides.fs !== undefined)
 const fs = provides.fs
 
 const t1 = await fs.resolve('hello.txt')
 ok('resolve joins root', t1.targetKey === ROOT + '/hello.txt', t1)
 
-// relative paths always resolve against the root: the fs tools inject the
-// session's HOST cwd, which must not leak into this remote world
+// An explicit execution-world cwd is honored; only the known local anchor
+// maps to the bound remote root.
 const tRemote = await fs.resolve('hello.txt', { cwd: '/tmp' })
-ok('resolve ignores foreign cwd', tRemote.targetKey === ROOT + '/hello.txt', tRemote)
+ok('resolve honors remote cwd', tRemote.targetKey.endsWith('/tmp/hello.txt'), tRemote)
 const tHost = await fs.resolve('hello.txt', { cwd: '/no/such/host/dir' })
-ok('resolve falls back to root for foreign cwd', tHost.targetKey === ROOT + '/hello.txt', tHost)
+ok('resolve maps original anchor to root', tHost.targetKey === ROOT + '/hello.txt', tHost)
 const t2 = await fs.resolve('/etc/hostname')
-ok('resolve absolute passthrough', t2.targetKey === '/etc/hostname', t2)
+ok('resolve absolute remote path canonically', t2.targetKey === (await conn.realpath('/etc')) + '/hostname', t2)
 
 const w1 = await fs.writeText(t1, 'line one\nline two\n')
 ok('write create', w1.operation === 'create' && w1.before === null, w1)
@@ -88,7 +94,7 @@ ok('stale version refuses', stale?.code === 'FS_STALE_VERSION', stale?.code)
 const e1 = await fs.editText(t1, { oldString: 'line two v2', newString: 'LINE TWO EDITED', replaceAll: false }, { kind: 'replaceIfVersion', version: w2.version })
 ok('editText applies', e1.after === 'line one\nLINE TWO EDITED\n' && e1.before.includes('line two v2'), e1)
 
-await writeFile(join(ROOT, 'dup.txt'), 'aa bb aa\n', 'utf8')
+await conn.writeFile(join(ROOT, 'dup.txt'), 'aa bb aa\n')
 const tDup = await fs.resolve('dup.txt')
 let nf = null, amb = null
 try { await fs.editText(tDup, { oldString: 'zz', newString: 'y', replaceAll: false }) } catch (e) { nf = e }
@@ -98,28 +104,31 @@ ok('edit ambiguous', amb?.code === 'FS_AMBIGUOUS_EDIT', amb?.code)
 const e2 = await fs.editText(tDup, { oldString: 'aa', newString: 'y', replaceAll: true })
 ok('edit replaceAll', e2.after === 'y bb y\n', e2)
 
-await writeFile(join(ROOT, 'crlf.txt'), 'a\r\nb\r\n', 'utf8')
+await conn.writeFile(join(ROOT, 'crlf.txt'), 'a\r\nb\r\n')
 const tCrlf = await fs.resolve('crlf.txt')
 const e3 = await fs.editText(tCrlf, { oldString: 'b', newString: 'B', replaceAll: false })
 ok('edit crlf normalized basis', e3.after === 'a\nB\n')
-const stored = await readFile(join(ROOT, 'crlf.txt'), 'utf8')
+const stored = await conn.readFile(join(ROOT, 'crlf.txt'))
 ok('crlf stored with CR', stored === 'a\r\nB\r\n', JSON.stringify(stored))
 
-await writeFile(join(ROOT, 'bin.dat'), Buffer.from([0, 1, 2, 3]))
+await conn.writeFile(join(ROOT, 'bin.dat'), Buffer.from([0, 1, 2, 3]))
 const tBin = await fs.resolve('bin.dat')
 let bin = null
 try { await fs.readText(tBin) } catch (e) { bin = e }
 ok('binary rejected', bin?.code === 'FS_NOT_TEXT', bin?.code)
-const bytes = await fs.readBytes(tBin, undefined, 2)
-ok('readBytes caps', bytes.length === 2 && bytes[0] === 0 && bytes[1] === 1, bytes)
+let overflow
+try { await fs.readBytes(tBin, undefined, 2) } catch (error) { overflow = error }
+ok('readBytes overflow rejects instead of truncating', overflow?.code === 'FS_TOO_LARGE', overflow?.code)
+const bytes = await fs.readByteRange(tBin, { offset: 0, length: 2 })
+ok('readByteRange returns requested prefix', bytes.length === 2 && bytes[0] === 0 && bytes[1] === 1, bytes)
 
-await writeFile(join(ROOT, 'stream.txt'), 'one\ntwo\nthree', 'utf8')
+await conn.writeFile(join(ROOT, 'stream.txt'), 'one\ntwo\nthree')
 const tStream = await fs.resolve('stream.txt')
 const lines = []
-for await (const line of fs.streamText(tStream)) lines.push(line)
-ok('streamText yields lines', JSON.stringify(lines) === JSON.stringify(['one', 'two', 'three']), lines)
+for await (const chunk of await fs.streamText(tStream)) lines.push(chunk)
+ok('streamText preserves newlines', lines.join('') === 'one\ntwo\nthree', lines)
 
-await mkdir(join(ROOT, 'sub'), { recursive: true })
+await remote(`mkdir -p ${posixQuote(join(ROOT, 'sub'))}`)
 const dir = await fs.resolve('.')
 const entries = await fs.listDir(dir)
 const names = entries.map((x) => x.name).sort()
@@ -127,7 +136,7 @@ ok('listDir entries', names.includes('hello.txt') && names.includes('sub') && na
 const subEntry = entries.find((x) => x.name === 'sub')
 ok('listDir target resolvable', (await fs.stat(subEntry.target))?.type === 'directory')
 ok('contains', fs.contains(dir, subEntry.target) && !fs.contains(subEntry.target, dir))
-execSync('ln -sf ' + join(ROOT, 'hello.txt') + ' ' + join(ROOT, 'link.txt'))
+await remote(`ln -s ${posixQuote(join(ROOT, 'hello.txt'))} ${posixQuote(join(ROOT, 'link.txt'))}`)
 const li = await fs.lstat('link.txt')
 ok('lstat sees symlink', li?.type === 'symlink', li)
 const li2 = await fs.lstat('hello.txt')
@@ -195,19 +204,20 @@ const tmpHome = join(process.env.DSH_HOME, 'preset-home')
 await rm(tmpHome, { recursive: true, force: true })
 const pres = await ensureRemotePreset({ home: tmpHome, profileId: 'ptest', profileName: 'TestBox', root: ROOT, target: 'remote://' + USER + '@' + HOST + ':' + PORT + ROOT })
 ok('preset authored', /^remote-ssh-[a-z0-9-]+$/.test(pres.presetId) && pres.wrote === true, pres)
-const again = await ensureRemotePreset({ home: tmpHome, profileId: 'ptest', profileName: 'TestBox', root: ROOT, target: 'remote://t@127.0.0.1:2223' + ROOT })
+const again = await ensureRemotePreset({ home: tmpHome, profileId: 'ptest', profileName: 'TestBox', root: ROOT, target: 'remote://' + USER + '@' + HOST + ':' + PORT + ROOT })
 ok('preset idempotent', again.wrote === false && again.presetId === pres.presetId)
 const comp = await readFile(join(pres.directory, 'agent.cordis.yml'), 'utf8')
-ok('composition shape', comp.includes('cordis:group') && comp.includes('isolate:') && comp.includes('fs: true') && comp.includes('shell: true') && comp.includes('remote-fs.js') && comp.includes('remote-shell.js') && comp.includes("@deepseek-ai/dsh-tool-fs'") && comp.includes("@deepseek-ai/dsh-tool-bash'"))
+const parsed = yaml.load(comp)
+const world = parsed[0]
+const rowNames = world.config.map(row => row.name)
+ok('composition shape', world.name === 'cordis:group' && world.isolate.fs === true
+  && world.isolate.shell === true && world.isolate.subprocess === true && world.isolate.workingDirectory === true
+  && rowNames.some(name => name.endsWith('remote-fs.js')) && rowNames.some(name => name.endsWith('remote-shell.js'))
+  && rowNames.some(name => name.endsWith('remote-subprocess.js'))
+  && rowNames.includes('@deepseek-ai/dsh-tool-fs') && rowNames.includes('@deepseek-ai/dsh-tool-bash'))
 const meta = await readFile(join(pres.directory, 'preset.yml'), 'utf8')
-ok('preset metadata', meta.includes('SSH · TestBox'), meta)
-try {
-  const yaml = (await import('/home/t/projects/deepseek-harness/node_modules/js-yaml/index.js')).default
-  const parsed = yaml.load(comp)
-  ok('composition parses', Array.isArray(parsed) && parsed[0]?.name === 'cordis:group' && parsed[0]?.isolate?.fs === true)
-} catch (e) {
-  console.log('SKIP composition parses (js-yaml unavailable:', e.message, ')')
-}
+ok('preset metadata', yaml.load(meta).name.includes('[SSH: TestBox]'), meta)
+ok('composition parses', Array.isArray(parsed) && world.name === 'cordis:group' && world.isolate.fs === true)
 const back = await readRemotePreset({ home: tmpHome, presetId: pres.presetId })
 ok('preset read back', back?.composition === comp)
 const listing = await listRemotePresets({ home: tmpHome })
@@ -219,6 +229,7 @@ await removeRemotePreset({ home: tmpHome, presetId: pres.presetId })
 const gone = await readRemotePreset({ home: tmpHome, presetId: pres.presetId })
 ok('preset removed', gone === undefined)
 
+await remote(`rm -rf -- ${posixQuote(ROOT)}`)
 conn.close()
 console.log('\nTOTAL: ' + pass + ' pass, ' + fail + ' fail')
 process.exit(fail ? 1 : 0)

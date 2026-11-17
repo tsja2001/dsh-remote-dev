@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### DSH 0.2.2-rc.3 compatibility
+
+- Namespace this plugin's seven model tools as `remote_dev_*` and its prompt section as `tool:remote-dev`. Generic `remote_exec` / `remote_read` / `remote_write` belong to other installed remote plugins; registering those aliases globally prevented `dsh-remote-vs` from starting. Actual-host registry tests cover coexistence in both registration orders without replacing another provider's tools.
+
+- Declare the tested DSH runtime and use optional host-core peers instead of installing obsolete core packages into the profile. Pin development interfaces and verify tarball installation neither auto-installs nor replaces host core packages.
+- Validate all seven remote tool results against current lossless JSON/output schemas; forward cooperative cancellation and apply the documented execution deadline.
+- Implement current filesystem range/patch/delete/move contracts, preserve UTF-8/newlines, reject bounded-read overflow, enforce current edit guards and serialize same-connection writes. Publish replacements without deleting the destination as a rename fallback.
+- Implement `shell.execute()` handles, independent output observers, expiry policy and awaited service-owned cancellation. Cancellation observes the SSH channel; remote process-tree termination is not guaranteed.
+- Add POSIX remote subprocess and working-directory services so current standard glob/grep execute remote ripgrep rather than host subprocesses. Remote `rg` is required; Windows workspace argv execution, PTYs, control channels and output spill fail explicitly.
+- Register generated presets through the runtime roster, consume `readDocument()`, await remote composition before the first model step, verify execution-world bindings and restore historical presets on reload. Composition failures no longer silently continue with local tools.
+- Add network-free current-host contract tests, optional installed-Desktop host tests, and temporary-file parameters for isolated SSH regressions. External equal-size SFTP edits within one timestamp interval remain limited by server metadata precision.
+
 ### 发布可靠性
 - npm 发布身份统一为用户 scope `dsh-remote-dev`，并同步插件清单、客户端模块 ID、Preset、安装命令与发布验证。
 - 根项目正式声明 npm workspace，使本地 `link:` 开发安装能够从插件的生产依赖声明构建完整依赖树。

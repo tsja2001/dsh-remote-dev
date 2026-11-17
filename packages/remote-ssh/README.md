@@ -22,6 +22,10 @@
   <img src="https://raw.githubusercontent.com/tsja2001/dsh-remote-ssh/main/docs/images/remote-connections.png" alt="DeepSeek Harness Remote SSH settings UI" width="100%">
 </p>
 
+## Compatibility
+
+This branch targets **DSH 0.2.2-rc.3**. Host core packages are optional peers, never bundled runtime dependencies. Full remote workspaces target POSIX servers and require `rg` on the remote PATH for standard glob/grep. Windows retains standalone `remote_dev_*` tools and SFTP; workspace subprocess execution, PTYs, control channels and raw-output spill are unsupported and fail explicitly. Cancellation observes SSH channel closure, not remote process-tree quiescence. SFTP external-edit detection is limited by server metadata precision.
+
 ## Install
 
 This is a [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness) bundle. One command
@@ -103,13 +107,13 @@ sessions of that workspace still open; **Also delete the generated preset** unde
 
 | Tool | Purpose |
 | --- | --- |
-| `remote_status` | List profiles, states, platforms, and recent errors. |
-| `remote_connect` | Connect with a saved profile or one-off credentials. |
-| `remote_disconnect` | Close a profile's live connection. |
-| `remote_exec` | Execute a command and return stdout, stderr, exit status, and platform. |
-| `remote_read` | Read a UTF-8 text file over SFTP. |
-| `remote_write` | Write a complete UTF-8 text file over SFTP. |
-| `remote_list` | List directory entries with type, size, and modification time. |
+| `remote_dev_status` | List profiles, states, platforms, and recent errors. |
+| `remote_dev_connect` | Connect with a saved profile or one-off credentials. |
+| `remote_dev_disconnect` | Close a profile's live connection. |
+| `remote_dev_exec` | Execute a command and return stdout, stderr, exit status, and platform. |
+| `remote_dev_read` | Read a UTF-8 text file over SFTP. |
+| `remote_dev_write` | Write a complete UTF-8 text file over SFTP. |
+| `remote_dev_list` | List directory entries with type, size, and modification time. |
 
 Try:
 
@@ -131,7 +135,7 @@ The bundle automatically contributes tool guidance to the DeepSeek Harness syste
 - DeepSeek Harness developer preview
 - A reachable SSH/SFTP target using password or explicit private-key authentication
 - UTF-8 text file reads and writes; binary transfer is not yet exposed as a model tool
-- Remote workspaces need a composition with an agent-preset roster (the standard Web/CLI ones have it); without one the plugin degrades to the `remote_*` tools
+- Remote workspaces need a composition with an agent-preset roster (the standard Web/CLI ones have it); without one the plugin degrades to the `remote_dev_*` tools
 - Inside a remote workspace, persistent-pty tools (`bash` in a kept-alive terminal) are disabled — the remote shell runs one command per call
 - No ProxyJump, port forwarding, LSP, remote terminal, or `known_hosts` integration yet
 

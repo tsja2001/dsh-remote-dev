@@ -24,6 +24,7 @@ const TARGET = {
 }
 const PASSWORD = process.env.DSH_TEST_PASSWORD || 'test1234'
 const NO_PASSWORD = process.env.DSH_TEST_NO_PASSWORD === '1'
+const TEST_FILE = process.env.DSH_TEST_FILE || '/tmp/dsh-mgr.txt'
 const keyPath = process.env.DSH_TEST_KEY || join(process.env.HOME || '', '.ssh', 'id_ed25519')
 
 const manager = new RemoteManager()
@@ -58,8 +59,8 @@ const conn = await manager.require(p.id)
 const e = await conn.exec('echo MANAGER_OK && whoami')
 check('exec via manager', e.code === 0 && e.stdout.includes('MANAGER_OK'), 'exit=' + e.code + ' out=' + e.stdout.trim())
 
-await conn.writeFile('/tmp/dsh-mgr.txt', 'manager write test\n')
-const rb = await conn.readFile('/tmp/dsh-mgr.txt')
+await conn.writeFile(TEST_FILE, 'manager write test\n')
+const rb = await conn.readFile(TEST_FILE)
 check('sftp write+read via manager', rb.trim() === 'manager write test', rb.trim())
 
 const t = await manager.test(p.id)

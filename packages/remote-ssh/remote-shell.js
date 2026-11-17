@@ -8,12 +8,15 @@
  * same cards — while `workdir` and the session-relative defaults resolve
  * against the baked remote root.
  *
- * Semantics honored (see dsh-shell's contract):
- * - run() resolves for nonzero exits, timeouts, and aborts (never rejects
- *   for those); only infrastructure failures reject.
- * - start() returns immediately with a consuming readOutput() handle whose
- *   done never rejects; kill() is idempotent.
- * - sandboxMode stays undefined: remote confinement is the remote user's.
+ * The dsh-shell 0.2.2 contract exposes execute(): one live handle with a
+ * lazy foreground result(), independent observed stream readers, and consuming
+ * readOutput(). Output retains bounded tails; only infrastructure failures
+ * reject result(), while done always resolves. Legacy run()/start() delegate
+ * to the same implementation. Preset/service disposal cancels preparation and
+ * closes and awaits this service's owned channels, without closing the shared
+ * SSH connection. Channel close is the transport's observation boundary: it
+ * does not prove the remote process tree stopped. Remote confinement is the
+ * remote user's.
  *
  * Environment policy: the harness process's ambient/managed DSH_* facts and
  * executor overrides describe THIS machine, so they are dropped — the remote
@@ -27,42 +30,77 @@ const DEFAULT_TIMEOUT_MS = 120000
 const MAX_TIMEOUT_MS = 600000
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 
-/** Collected-output cap with lossy truncation, mirroring the local shape. */
+/** Reject budgets that cannot bound a buffer or a timer. */
+function positiveNumber(name, value) {
+	const number = Number(value)
+	if (!Number.isFinite(number) || number <= 0) throw new Error(`remote shell: ${name} must be a positive finite number`)
+	return number
+}
+
+/** Bounded raw-byte tail with whole-stream offsets and independent readers. */
 function makeCollector(maxBytes) {
-	let text = ''
-	let truncated = false
+	const limit = Math.max(1, Math.floor(positiveNumber('maxOutputBytes', maxBytes)))
+	let bytes = Buffer.alloc(0)
+	let total = 0
+	let ended = false
 	return {
 		push(chunk) {
-			if (truncated) return
-			const next = text + chunk
-			if (Buffer.byteLength(next, 'utf8') > maxBytes) {
-				const keep = Buffer.byteLength(text, 'utf8')
-				const room = Math.max(0, maxBytes - keep)
-				if (room > 0) text += Buffer.from(next, 'utf8').subarray(keep, keep + room).toString('utf8')
-				truncated = true
-				return
-			}
-			text = next
+			const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+			total += next.length
+			if (next.length >= limit) bytes = Buffer.from(next.subarray(next.length - limit))
+			else bytes = Buffer.concat([bytes.subarray(Math.max(0, bytes.length + next.length - limit)), next])
+			// Do not turn a cut UTF-8 prefix into replacement characters that
+			// exceed the byte cap. Whole-stream coordinates still include it.
+			let start = 0
+			while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++
+			if (start) bytes = Buffer.from(bytes.subarray(start))
 		},
-		result() {
-			return { text, truncated }
+		end() { ended = true },
+		readFrom(fromByte) {
+			const offset = Math.max(0, Math.floor(Number(fromByte) || 0))
+			const base = total - bytes.length
+			let end = bytes.length
+			if (!ended && end) {
+				// Keep a split UTF-8 character for the next observation rather
+				// than consuming half of it at a transport chunk boundary.
+				let start = end - 1
+				while (start > 0 && (bytes[start] & 0xc0) === 0x80) start--
+				const lead = bytes[start]
+				const width = lead >= 0xf0 && lead <= 0xf4 ? 4 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xc2 && lead <= 0xdf ? 2 : 1
+				if (end - start < width) end = start
+			}
+			const start = Math.min(end, Math.max(0, offset - base))
+			return { text: bytes.subarray(start, end).toString('utf8'), nextOffset: base + end, lossy: offset < base }
 		},
 	}
+}
+
+function finalOutput(reader) {
+	const { text, lossy } = reader.readFrom(0)
+	return { text, truncated: lossy }
 }
 
 export class RemoteSshShell {
 	constructor(support, config = {}) {
 		this.support = support
-		this.defaultTimeoutMs = Math.min(Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
-		this.maxOutputBytes = Number(config.maxOutputBytes) || DEFAULT_MAX_OUTPUT_BYTES
+		Object.defineProperties(this, {
+			profileId: { value: support.profileId, enumerable: true },
+			root: { value: support.root, enumerable: true },
+		})
+		this.defaultTimeoutMs = Math.min(positiveNumber('timeoutMs', config.timeoutMs ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS)
+		this.maxOutputBytes = positiveNumber('maxOutputBytes', config.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES)
+		this._disposeController = new AbortController()
+		this._handles = new Set()
+		this._executions = new Set()
+		this._disposePromise = null
 	}
 
 	get sandboxMode() {
 		return undefined
 	}
 
-	async conn() {
-		return this.support.acquire('shell')
+	async conn(signal) {
+		return this.support.acquire('shell', { signal })
 	}
 
 	/** Compose the remote command line: workdir, exported env, then the command. */
@@ -98,7 +136,7 @@ export class RemoteSshShell {
 	 * which usually does not exist remotely); otherwise fall back to the
 	 * bound workspace root. Results are memoized per directory.
 	 */
-	async workdirFor(request) {
+	async workdirFor(request, connection, signal) {
 		const wanted = request.workdir
 		if (!wanted) return this.support.root
 		this._dirOk = this._dirOk || new Set()
@@ -107,12 +145,15 @@ export class RemoteSshShell {
 		if (this._dirBad.has(wanted) || wanted === this.support.root) return this.support.root
 		if (wanted.startsWith('/') || /^[A-Za-z]:[\\/]/.test(wanted) || wanted.startsWith('\\\\')) {
 			try {
-				const conn = await this.conn()
-				const st = await conn.statPath(wanted)
+				const conn = connection || await this.conn(signal)
+				signal?.throwIfAborted()
+				const st = await conn.statPath(wanted, { signal })
+				signal?.throwIfAborted()
 				if (!st || !st.isDirectory()) throw new Error('not a directory')
 				this._dirOk.add(wanted)
 				return wanted
 			} catch {
+				if (signal?.aborted) throw signal.reason
 				this._dirBad.add(wanted)
 				return this.support.root
 			}
@@ -121,15 +162,15 @@ export class RemoteSshShell {
 	}
 
 	resolve(request) {
-		const timeoutMs = Math.min(
-			Math.max(1, Number(request.timeoutMs) || this.defaultTimeoutMs),
-			MAX_TIMEOUT_MS,
-		)
-		const stdoutMaxBytes = request.stdoutMaxBytes ?? this.maxOutputBytes
+		const timeoutMs = Math.min(positiveNumber('request.timeoutMs', request.timeoutMs ?? this.defaultTimeoutMs), MAX_TIMEOUT_MS)
+		const stdoutMaxBytes = positiveNumber('request.stdoutMaxBytes', request.stdoutMaxBytes ?? this.maxOutputBytes)
+		const onExpiry = request.onExpiry ?? 'kill'
+		if (onExpiry !== 'kill' && onExpiry !== 'none') throw new Error('remote shell: onExpiry must be kill or none')
 		return {
 			command: request.command,
 			workdir: request.workdir ?? this.support.root,
 			timeoutMs,
+			onExpiry,
 			stdoutMaxBytes,
 			...request.signal ? { signal: request.signal } : {},
 			...request.stdin !== undefined ? { stdin: request.stdin } : {},
@@ -138,76 +179,214 @@ export class RemoteSshShell {
 		}
 	}
 
-	async run(spec) {
-		const conn = await this.conn()
-		const posix = await this.support.platformOf(conn)
-		const stdout = makeCollector(spec.stdoutMaxBytes)
-		const stderr = makeCollector(this.maxOutputBytes)
-		const workdir = await this.workdirFor(spec)
-		const command = this.buildCommand(workdir === spec.workdir ? spec : { ...spec, workdir }, posix)
-		let firstCause = null
-		const onAbort = () => {
-			if (!firstCause) firstCause = 'abort'
-		}
-		const session = await conn.startExec(command, {
-			timeoutMs: spec.timeoutMs,
-			signal: spec.signal,
-			onAbort,
-			onStdout: (d) => stdout.push(d.toString('utf8')),
-			onStderr: (d) => stderr.push(d.toString('utf8')),
-			stdin: spec.stdin,
-		})
-		await session.done
-		if (session.signal === 'timeout') firstCause = firstCause || 'timeout'
-		return {
-			exitCode: session.signal ? null : session.code,
-			signal: session.signal && session.signal !== 'timeout' && session.signal !== 'abort' ? 'SIGKILL' : null,
-			timedOut: firstCause === 'timeout' || session.signal === 'timeout',
-			aborted: firstCause === 'abort' || session.signal === 'abort',
-			timeoutMs: spec.timeoutMs,
-			stdout: stdout.result(),
-			stderr: stderr.result(),
-		}
+	/** Track preparation as well as live handles so unload cannot miss either. */
+	execute(spec) {
+		if (this._disposeController.signal.aborted) return Promise.reject(this._disposeController.signal.reason)
+		// Register ownership before any preparation callbacks can run.
+		const opening = Promise.resolve().then(() => this._execute(spec))
+		const owned = opening.then((handle) => {
+			this._handles.add(handle)
+			return handle.done.then(() => { this._handles.delete(handle) })
+		}, () => { /* preparation failure has no published channel to await */ })
+		this._executions.add(owned)
+		void owned.then(() => { this._executions.delete(owned) })
+		return opening
 	}
 
-	async start(spec) {
-		const conn = await this.conn()
-		const posix = await this.support.platformOf(conn)
-		const command = this.buildCommand({ ...spec, timeoutMs: undefined }, posix)
-		let pending = ''
-		let lossy = false
+	/** Cancel this world's work and await channel settlement, never the shared connection. */
+	dispose() {
+		if (this._disposePromise) return this._disposePromise
+		// Publish the promise before abort listeners run, preserving idempotence
+		// even if a listener re-enters disposal.
+		this._disposePromise = Promise.resolve().then(async () => {
+			await Promise.all([...this._executions])
+		})
+		this._disposeController.abort(Object.assign(new Error('remote shell service disposed'), { name: 'AbortError' }))
+		for (const handle of this._handles) handle.kill()
+		return this._disposePromise
+	}
+
+	/** Prepare under one deadline, then publish the shared batch/stream handle. */
+	async _execute(spec) {
+		const stdout = makeCollector(spec.stdoutMaxBytes)
+		const stderr = makeCollector(this.maxOutputBytes)
+		const cancellation = new AbortController()
+		const signal = cancellation.signal
+		const startedAt = Date.now()
+		let firstCause = null
+		let timer
+		let settled = false
+		const cancel = (cause, reason) => {
+			if (settled || firstCause) return
+			firstCause = cause
+			cancellation.abort(reason)
+		}
+		const disposal = this._disposeController.signal
+		const onAbort = () => cancel('abort', spec.signal.reason)
+		const onDispose = () => cancel('abort', disposal.reason)
+		const disarm = () => {
+			clearTimeout(timer)
+			spec.signal?.removeEventListener('abort', onAbort)
+			disposal.removeEventListener('abort', onDispose)
+		}
+		if (disposal.aborted) onDispose()
+		else disposal.addEventListener('abort', onDispose, { once: true })
+		if (spec.signal?.aborted) onAbort()
+		else spec.signal?.addEventListener('abort', onAbort, { once: true })
+		if ((spec.onExpiry ?? 'kill') === 'kill' && !signal.aborted) {
+			timer = setTimeout(() => cancel('timeout', new Error('remote shell execution timed out')), spec.timeoutMs)
+		}
+
+		let conn
+		let command
+		let preparationTimedOut = false
+		let onPreparationAbort
+		try {
+			const cancelled = new Promise((_, reject) => {
+				onPreparationAbort = () => reject(signal.reason)
+				if (signal.aborted) onPreparationAbort()
+				else signal.addEventListener('abort', onPreparationAbort, { once: true })
+			})
+			const preparing = async () => {
+				signal.throwIfAborted()
+				conn = await this.conn(signal)
+				signal.throwIfAborted()
+				const platform = await this.support.platformOf(conn, { signal })
+				signal.throwIfAborted()
+				const workdir = await this.workdirFor(spec, conn, signal)
+				signal.throwIfAborted()
+				return this.buildCommand({ ...spec, workdir }, platform !== 'windows' && platform !== false)
+			}
+			command = await Promise.race([preparing(), cancelled])
+			signal.throwIfAborted()
+		} catch (error) {
+			if (firstCause !== 'timeout') {
+				disarm()
+				throw error
+			}
+			preparationTimedOut = true
+		} finally {
+			signal.removeEventListener('abort', onPreparationAbort)
+		}
+
+		let session
+		let failure
+		let resultPromise
+		let stdoutOffset = 0
+		let stderrOffset = 0
 		const handle = {
-			status: 'running',
+			status: preparationTimedOut ? 'killed' : 'running',
 			exitCode: null,
 			signal: null,
+			observed: {
+				stdout: { readFrom: (offset) => stdout.readFrom(offset) },
+				stderr: { readFrom: (offset) => stderr.readFrom(offset) },
+			},
 			done: null,
 			readOutput() {
-				const delta = pending
-				pending = ''
-				const wasLossy = lossy
-				lossy = false
-				return { delta, lossy: wasLossy }
+				const out = stdout.readFrom(stdoutOffset)
+				const err = stderr.readFrom(stderrOffset)
+				stdoutOffset = out.nextOffset
+				stderrOffset = err.nextOffset
+				const separator = out.text && !out.text.endsWith('\n') ? '\n' : ''
+				return {
+					delta: out.text + (err.text ? `${separator}[stderr]\n${err.text}` : ''),
+					lossy: out.lossy || err.lossy,
+				}
 			},
 			kill() {
-				if (this.status !== 'running') return false
-				this._killed = true
-				try { session.kill() } catch { /* already closed */ }
+				if (settled || handle.status !== 'running') return false
+				handle.status = 'killed'
+				// A published channel uses its explicit kill operation, preserving
+				// the transport's signal. Pending channel opens use our owned
+				// cancellation signal; neither is classified as caller abort.
+				disarm()
+				if (session) {
+					try { session.kill() } catch { /* already closed */ }
+				} else cancellation.abort(new Error('remote shell execution killed'))
 				return true
 			},
+			result() {
+				resultPromise ??= handle.done.then(() => {
+					if (failure) throw failure.error
+					return {
+						exitCode: handle.exitCode,
+						signal: handle.signal,
+						timedOut: firstCause === 'timeout',
+						aborted: firstCause === 'abort',
+						timeoutMs: spec.timeoutMs,
+						stdout: finalOutput(stdout),
+						stderr: finalOutput(stderr),
+					}
+				})
+				return resultPromise
+			},
 		}
-		const session = await conn.startExec(command, {
-			stdin: spec.stdin,
-			onStdout: (d) => { pending += d.toString('utf8') },
-			onStderr: (d) => { pending += '\n[stderr]\n' + d.toString('utf8') },
-		})
-		handle.done = session.done.then(() => {
-			handle.exitCode = session.signal ? null : session.code
-			handle.signal = session.signal && session.signal !== 'timeout' && session.signal !== 'abort' ? 'SIGKILL' : null
-			// A channel we closed ourselves reports a plain exit; the kill flag
-			// keeps the handle's lifecycle honest for job consumers.
-			handle.status = session.signal || handle._killed ? 'killed' : 'completed'
-		})
+
+		const complete = () => {
+			settled = true
+			stdout.end()
+			stderr.end()
+			disarm()
+		}
+		const failed = (error) => {
+			// Cancellation before a channel opened is still an owned terminal
+			// outcome. A genuine provider failure is read once on stderr and
+			// rejects only the lazy result projection.
+			// The transport's channel-open timer can win the same deadline by
+			// a millisecond; it remains our timeout, not an infrastructure error.
+			if (!firstCause && spec.onExpiry !== 'none' && error?.code === 'ETIMEDOUT') cancel('timeout', error)
+			const ownedTermination = signal.aborted || handle.status === 'killed'
+			handle.status = 'killed'
+			if (!ownedTermination) {
+				failure = { error }
+				let detail = 'unprintable provider failure'
+				try { detail = String(error) } catch { /* preserve never-rejecting done */ }
+				stderr.push(`remote exec failed before reporting an outcome: ${detail}`)
+			}
+			complete()
+		}
+		let spawned
+		try {
+			spawned = preparationTimedOut ? Promise.resolve() : conn.startExec(command, {
+				...spec.onExpiry === 'none' ? {} : { timeoutMs: Math.max(1, spec.timeoutMs - (Date.now() - startedAt)) },
+				signal,
+				// Older transports require onAbort to enable signal handling.
+				onAbort() {},
+				onStdout: (data) => { if (!settled) stdout.push(data) },
+				onStderr: (data) => { if (!settled) stderr.push(data) },
+				stdin: spec.stdin ?? '',
+			})
+		} catch (error) {
+			spawned = Promise.reject(error)
+		}
+		handle.done = Promise.resolve(spawned).then(async (running) => {
+			if (running) {
+				session = running
+				// A transport may publish the channel after cancellation/kill.
+				if (signal.aborted && session.status === 'running') session.kill()
+				await session.done
+				if (session.error) throw session.error
+				if (!firstCause && session.signal === 'timeout') firstCause = 'timeout'
+				if (!firstCause && session.signal === 'abort' && handle.status !== 'killed') firstCause = 'abort'
+				handle.exitCode = session.signal ? null : session.code ?? null
+				handle.signal = session.signal && !['timeout', 'abort', 'error'].includes(session.signal)
+					? (session.signal.startsWith('SIG') ? session.signal : `SIG${session.signal}`) : null
+				handle.status = handle.status === 'killed' || signal.aborted || session.signal ? 'killed' : 'completed'
+			}
+			complete()
+		}).catch(failed)
 		return handle
+	}
+
+	/** Compatibility for callers of the pre-0.2.2 foreground API. */
+	async run(spec) {
+		return (await this.execute(spec)).result()
+	}
+
+	/** Legacy start() never armed a deadline; the caller still owns its signal. */
+	async start(spec) {
+		return this.execute({ ...spec, onExpiry: 'none' })
 	}
 }
 
@@ -219,8 +398,11 @@ export class RemoteSshShell {
 export function apply(ctx, config = {}) {
 	const support = worldSupport(ctx, config)
 	const shell = new RemoteSshShell(support, config)
-	const dispose = ctx.provide('shell', shell)
-	ctx.effect(() => dispose)
+	const unprovide = ctx.provide('shell', shell)
+	ctx.effect(() => async () => {
+		await shell.dispose()
+		unprovide()
+	})
 }
 
 export default { apply }

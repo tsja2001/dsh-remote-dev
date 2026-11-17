@@ -12,8 +12,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node scripts/test-setup.js && node scripts/test-workspaces.js && node scripts/test-ssh2.js && node scripts/test-manager.js && node scripts/test-world.js",
-    "test:offline": "node scripts/test-setup.js && node scripts/test-workspaces.js",
+    "test": "npm run test:offline && node scripts/test-ssh2.js && node scripts/test-manager.js && node scripts/test-world.js",
+    "test:offline": "node scripts/test-setup.js && node scripts/test-workspaces.js && node scripts/test-manager-contract.js && node scripts/test-tools-contract.js && node scripts/test-fs-contract.js && node scripts/test-shell-contract.js && node scripts/test-subprocess-contract.js",
+    "test:host": "node scripts/run-host-tests.cjs scripts/test-tools-contract.js scripts/test-fs-contract.js scripts/test-shell-contract.js scripts/test-subprocess-contract.js scripts/test-preset-contract.js",
+    "test:installed-profile": "node scripts/test-installed-profile.cjs",
     "check": "npm --prefix packages/remote-ssh run check",
     "package:check": "node scripts/check-package.js",
     "release:check": "npm test && npm run package:check"
@@ -27,7 +29,11 @@
   "bugs": {
     "url": "https://github.com/tsja2001/dsh-remote-dev/issues"
   },
-  "dependencies": {
-    "dsh-remote-dev": "^9.9.9"
+  "devDependencies": {
+    "@deepseek-ai/cordis-plugin-include": "1.1.0",
+    "@deepseek-ai/dsh-fs": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-fs-patch": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3"
   }
 }

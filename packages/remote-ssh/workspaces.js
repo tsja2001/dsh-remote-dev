@@ -22,23 +22,22 @@
  *    through `ctx.workspaceRegistry`, then titled `dir [SSH: machine]`. The
  *    api-proxy pushes the new row to every connected browser by itself, so
  *    the sidebar updates without the client doing anything.
- * 3. Automatic composition: on `agent/created`, a session whose cwd is an
- *    anchor is recomposed onto that workspace's preset and the choice is
- *    appended to its log, so a later resume rebuilds the same remote world.
- *    `agent/pre-step` awaits an in-flight recomposition, so a prompt that
- *    arrives inside the (millisecond) window still runs remotely.
+ * 3. Runtime preset registration and composition: `agent/created` is a serial,
+ *    awaited publication boundary in DSH 0.2.2. Its listener finishes binding
+ *    and verifying the remote world before the loop can capture tools. A
+ *    failure rejects publication; a remote session never falls back to local.
  *
  * @module dsh-remote-dev/workspaces
  */
 
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { readFile, realpath, rm, rmdir, writeFile } from 'node:fs/promises'
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { readFile, readdir, realpath, rm, rmdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve as resolvePath, sep } from 'node:path'
 import {
-	ensureRemotePreset, listRemotePresets, presetIdFor, presetNeedsRefresh,
-	REMOTE_PRESET_PREFIX, removeRemotePreset,
+	ensureRemotePreset, listRemotePresets, presetIdFor, readPersistedBase, readRemotePresetDefinition,
+	readSourceStamp, REALM_SERVICES, REMOTE_PRESET_ID, REMOTE_PRESET_PREFIX, removeRemotePreset,
 } from './presets.js'
 
 /** The DSH home directory (presets and plugin state live under it). */
@@ -146,8 +145,36 @@ async function ensureAnchor(anchor, record) {
 
 /** Guard: only ever delete inside our own anchor root. */
 function insideAnchorRoot(anchor, home) {
-	const base = resolvePath(anchorRoot(home)) + sep
-	return resolvePath(anchor).startsWith(base)
+	try {
+		// Both sides must use the same identity (/var is /private/var on macOS).
+		const base = realpathSync(anchorRoot(home)) + sep
+		return realpathSync(anchor).startsWith(base)
+	} catch {
+		return false
+	}
+}
+
+/** Recover legacy historical anchors from this plugin's own marker layout. */
+async function historicalAnchors(home) {
+	const found = new Map()
+	const directories = async path => {
+		try { return (await readdir(path, { withFileTypes: true })).filter(entry => entry.isDirectory()) }
+		catch (error) { if (error.code === 'ENOENT') return []; throw error }
+	}
+	for (const machine of await directories(anchorRoot(home))) {
+		const machinePath = join(anchorRoot(home), machine.name)
+		for (const entry of await directories(machinePath)) {
+			const anchor = await realpath(join(machinePath, entry.name))
+			try {
+				const marker = JSON.parse(await readFile(join(anchor, '.dsh-remote-workspace.json'), 'utf8'))
+				if (REMOTE_PRESET_ID.test(marker.preset) && marker.profile && marker.remoteRoot) {
+					found.set(marker.preset, { anchor, profileId: marker.profile, root: marker.remoteRoot,
+						label: marker.machine, target: marker.target })
+				}
+			} catch { /* An unrelated or invalid marker never supplies a binding. */ }
+		}
+	}
+	return found
 }
 
 /**
@@ -169,7 +196,9 @@ export class RemoteWorkspaces {
 		this.presets = null
 		/** `workspaceRegistry` service, while one is composed. */
 		this.registry = null
-		/** sessionId -> in-flight recomposition (awaited before the first step). */
+		/** One registry incarnation owns its own registrations and async disposers. */
+		this.presetState = null
+		/** sessionId -> the awaited publication transaction. */
 		this.pending = new Map()
 	}
 
@@ -186,7 +215,19 @@ export class RemoteWorkspaces {
 	byAnchor(path) {
 		if (!path) return undefined
 		const wanted = resolvePath(String(path))
-		return this.list().find(record => record.anchor && resolvePath(record.anchor) === wanted)
+		const record = this.list().find(record => record.anchor && resolvePath(record.anchor) === wanted)
+		if (record) return record
+		// Removing a sidebar workspace deliberately preserves its anchor and
+		// preset. A new/resumed session there must still be recognized as remote.
+		if (!insideAnchorRoot(wanted, this.home)) return undefined
+		try {
+			const marker = JSON.parse(readFileSync(join(wanted, '.dsh-remote-workspace.json'), 'utf8'))
+			if (!REMOTE_PRESET_ID.test(marker.preset) || !marker.profile || !marker.remoteRoot) return { anchor: wanted, invalidBinding: true }
+			return { anchor: wanted, presetId: marker.preset, profileId: marker.profile,
+				root: marker.remoteRoot, label: marker.machine || marker.profile, target: marker.target }
+		} catch {
+			return { anchor: wanted, invalidBinding: true }
+		}
 	}
 
 	/** The record for one id, or undefined. */
@@ -200,56 +241,93 @@ export class RemoteWorkspaces {
 		if (logger?.warn) logger.warn(message)
 	}
 
-	/**
-	 * The base composition every remote preset is derived from: the
-	 * deployment's default preset, or the first healthy non-remote one when
-	 * the default is missing, broken, or itself a remote workspace.
-	 * @returns {Promise<{id: string, path: string, text: string} | null>}
-	 */
-	async resolveBase() {
-		const presets = this.presets
+	stateFor(presets = this.presets) {
 		if (!presets) return null
-		const usable = preset => preset && !preset.broken && !preset.id.startsWith(REMOTE_PRESET_PREFIX)
-		let chosen = null
-		try {
-			const preferred = await presets.resolve()
-			if (usable(preferred)) chosen = preferred
-		} catch {
-			/* an unknown or unreadable default falls through to the roster scan */
-		}
-		if (!chosen) {
-			try {
-				chosen = (await presets.list()).find(usable) || null
-			} catch {
-				chosen = null
-			}
-		}
-		if (!chosen) return null
-		try {
-			return { id: chosen.id, path: chosen.path, text: await readFile(chosen.path, 'utf8') }
-		} catch {
-			return null
-		}
+		if (this.presetState?.presets === presets) return this.presetState
+		this.presetState = { presets, active: true, registrations: new Map(), tasks: new Map(), ready: Promise.resolve() }
+		return this.presetState
 	}
 
 	/**
-	 * Author (or refresh) the preset of one record.
-	 * @param {object} record - the stored record.
-	 * @param {object} [options] - { force } to rewrite even when the stamp matches.
+	 * readDocument is the current runtime contract; roster rows carry no path
+	 * or declaring base URL. Do not resolve relative names against this plugin.
+	 * Reading the default document avoids resolve/list's diagnostic settlement
+	 * inside a Host plugin's activation (which would wait for that same plugin).
 	 */
-	async refreshPreset(record, options = {}) {
-		const base = await this.resolveBase()
-		if (!options.force && !(await presetNeedsRefresh({ home: this.home, presetId: record.presetId, base }))) {
-			return { presetId: record.presetId, wrote: false }
+	async resolveBase(state = this.stateFor(), preferredId) {
+		const presets = state?.presets
+		if (!presets) return null
+		if (typeof presets.readDocument !== 'function' || typeof presets.register !== 'function') {
+			throw new Error('remote workspaces require the DSH 0.2.2 preset readDocument/register API')
 		}
-		return await ensureRemotePreset({
-			home: this.home,
-			profileId: record.profileId,
-			profileName: record.label,
-			root: record.root,
-			target: record.target,
-			base,
-		})
+		const id = preferredId || presets.defaultId
+		if (!id || id.startsWith(REMOTE_PRESET_PREFIX)) {
+			throw new Error('remote workspaces require a non-remote base preset')
+		}
+		const document = await presets.readDocument(id)
+		if (typeof document?.content !== 'string') throw new Error(`preset "${id}" publishes no composition document`)
+		return { id: document.agentPreset || id, text: document.content }
+	}
+
+	/** Serialize refresh/re-registration of an identity, including startup races. */
+	async refreshPreset(record, options = {}) {
+		if (record.presetId !== presetIdFor(record.profileId, record.root)) {
+			throw new Error(`remote preset "${record.presetId}" does not match its persisted binding`)
+		}
+		const state = options.state || this.stateFor()
+		const refresh = async () => {
+			if (state && !state.active) throw new Error('remote preset registry is unloading')
+			let base
+			try {
+				base = await this.resolveBase(state, options.baseId)
+			} catch (error) {
+				if (!options.persisted) throw error
+				base = await readPersistedBase({ home: this.home, presetId: record.presetId, baseId: options.baseId })
+			}
+			const authored = await ensureRemotePreset({
+				home: this.home, profileId: record.profileId, profileName: record.label,
+				root: record.root, target: record.target, anchor: record.anchor, base,
+			})
+			if (!state) return authored
+			const definition = await readRemotePresetDefinition({ home: this.home, presetId: record.presetId })
+			const hash = createHash('sha256').update(JSON.stringify(definition)).digest('hex')
+			const previous = state.registrations.get(record.presetId)
+			if (previous?.hash === hash) return authored
+			if (previous) {
+				await previous.dispose()
+				state.registrations.delete(record.presetId)
+			}
+			if (!state.active) throw new Error('remote preset registry is unloading')
+			const dispose = await state.presets.register(definition)
+			if (typeof dispose !== 'function') throw new Error('preset registration returned no disposer')
+			if (!state.active) {
+				await dispose()
+				throw new Error('remote preset registry unloaded during registration')
+			}
+			state.registrations.set(record.presetId, { hash, dispose })
+			return authored
+		}
+		if (!state) return refresh()
+		const work = (state.tasks.get(record.presetId) || Promise.resolve()).catch(() => {}).then(refresh)
+		state.tasks.set(record.presetId, work)
+		const forget = () => { if (state.tasks.get(record.presetId) === work) state.tasks.delete(record.presetId) }
+		void work.then(forget, forget)
+		return work
+	}
+
+	/** Unregister every owned definition, retaining revisions leased by Agents. */
+	async disposePresets(state = this.presetState) {
+		if (!state) return
+		state.active = false
+		if (this.presetState === state) {
+			this.presetState = null
+			this.presets = null
+		}
+		await Promise.allSettled([...state.tasks.values()])
+		const results = await Promise.allSettled([...state.registrations.values()].map(entry => entry.dispose()))
+		state.registrations.clear()
+		const failures = results.filter(result => result.status === 'rejected').map(result => result.reason)
+		if (failures.length) throw new AggregateError(failures, 'remote preset teardown failed')
 	}
 
 	/**
@@ -265,6 +343,7 @@ export class RemoteWorkspaces {
 	 * @returns {Promise<object>} the stored record, with `workspaceId` when a registry is composed.
 	 */
 	async create({ profileId, root }) {
+		await this.stateFor()?.ready
 		const id = String(profileId || '')
 		const remoteRoot = String(root || '').trim()
 		if (!id) throw new Error('remote workspace: a machine must be selected')
@@ -291,10 +370,9 @@ export class RemoteWorkspaces {
 		const preset = await this.refreshPreset(record, { force: true })
 		record.baseId = preset.baseId || ''
 		record.notes = preset.notes || []
-		// Without a roster the generated preset can never be mounted, so the
-		// sessions of this workspace would silently run on the HOST. The row is
-		// still created (the binding is real), and the flag lets the UI say so.
-		record.composable = Boolean(this.presets)
+		// A missing registry leaves the standalone tools usable, but opening a
+		// session under this anchor is rejected by the publication guard.
+		record.composable = Boolean(this.stateFor()?.registrations.has(record.presetId))
 
 		// The profile binding keeps the standalone remote_* tools pointed at
 		// the same directory, so both worlds agree on "the" working directory.
@@ -352,7 +430,14 @@ export class RemoteWorkspaces {
 			}
 		}
 		if (deletePreset) {
-			await removeRemotePreset({ home, presetId: record.presetId }).catch(() => {})
+			const state = this.stateFor()
+			await state?.tasks.get(record.presetId)
+			const registration = state?.registrations.get(record.presetId)
+			if (registration) {
+				await registration.dispose()
+				state.registrations.delete(record.presetId)
+			}
+			await removeRemotePreset({ home, presetId: record.presetId })
 			if (insideAnchorRoot(record.anchor, home)) {
 				await rm(record.anchor, { recursive: true, force: true }).catch(() => {})
 				// The per-machine directory is ours too; rmdir declines while
@@ -374,31 +459,44 @@ export class RemoteWorkspaces {
 	 * overrule it. A record whose row is gone keeps its preset (old sessions
 	 * still resume into it) and is offered for re-adding in the remote picker.
 	 */
-	async reconcile() {
+	async reconcile(options = {}) {
 		const home = this.home
 		const records = loadRecords(home)
-		if (!records.length) return records
+		const state = options.state || this.stateFor()
 		const rows = this.registry ? this.registry.list() : []
-		let dirty = false
+		const restored = new Set()
 		for (const record of records) {
 			try {
 				record.anchor = await ensureAnchor(record.anchor, record)
-				const preset = await this.refreshPreset(record)
-				if (preset.baseId !== undefined && preset.baseId !== record.baseId) {
-					record.baseId = preset.baseId
-					dirty = true
-				}
+				const preset = await this.refreshPreset(record, { state })
+				record.baseId = preset.baseId
+				record.composable = Boolean(state?.registrations.has(record.presetId))
+				restored.add(record.presetId)
 				const row = rows.find(candidate => candidate.path === record.anchor)
-				const workspaceId = row ? row.id : undefined
-				if (workspaceId !== record.workspaceId) {
-					record.workspaceId = workspaceId
-					dirty = true
-				}
+				record.workspaceId = row?.id
 			} catch (error) {
+				record.composable = false
 				this.warn(`remote-ssh: could not restore remote workspace "${record.title}": ${String(error)}`)
 			}
 		}
-		if (dirty) saveRecords(records, home)
+		if (records.length) saveRecords(records, home)
+		// Historical sessions can name a preset even after its workspace record
+		// was removed. The host no longer discovers these directories itself.
+		const anchors = state ? await historicalAnchors(home) : new Map()
+		if (state) for (const preset of await listRemotePresets({ home })) {
+			if (restored.has(preset.presetId)) continue
+			try {
+				if (!preset.profile || !preset.root) throw new Error('persisted preset has no trustworthy profile/root stamp')
+				const marker = anchors.get(preset.presetId)
+				if (marker && (marker.profileId !== preset.profile || marker.root !== preset.root)) throw new Error('historical anchor does not match its preset stamp')
+				await this.refreshPreset({ presetId: preset.presetId, profileId: preset.profile,
+					root: preset.root, label: preset.name || marker?.label, target: preset.target || marker?.target,
+					anchor: preset.anchor || marker?.anchor },
+				{ state, baseId: preset.baseId || undefined, persisted: true })
+			} catch (error) {
+				this.warn(`remote-ssh: could not register historical preset "${preset.presetId}": ${String(error)}`)
+			}
+		}
 		return records
 	}
 
@@ -412,90 +510,107 @@ export class RemoteWorkspaces {
 	 * @returns {Promise<void> | undefined} the in-flight recomposition, when one started.
 	 */
 	composeFor(agent) {
+		const record = this.byAnchor(agent?.session?.header?.cwd)
 		const presets = this.presets
-		if (!presets) return undefined
-		const cwd = agent?.session?.header?.cwd
-		if (!cwd) return undefined
-		const record = this.byAnchor(cwd)
-		if (!record) return undefined
-		let composed
-		try {
-			composed = presets.composedPreset(agent.ctx)
-		} catch {
-			return undefined
-		}
-		if (composed === record.presetId) return undefined
+		const composed = presets?.composedPreset(agent.ctx)
+		if (!record && !composed?.startsWith(REMOTE_PRESET_PREFIX)) return undefined
+		if (this.pending.has(agent.id)) return this.pending.get(agent.id)
 		const work = (async () => {
-			await this.refreshPreset(record)
-			await presets.recompose(agent.ctx, record.presetId)
-			// Recorded only after the swap committed, exactly as the browser's
-			// own preset switch does: the log is what a later resume reads, so
-			// this session rebuilds the same remote world without this hook.
-			agent.session.append('agent-preset/selected', { agentPreset: record.presetId })
-		})().catch((error) => {
-			this.warn(
-				`remote-ssh: session "${agent.id}" could not compose remote workspace "${record.title}" `
-				+ `(preset ${record.presetId}): ${String(error)}`,
-			)
-		})
+			if (record?.invalidBinding) throw new Error('remote workspace anchor has no valid persisted binding')
+			const state = this.stateFor()
+			if (!state) throw new Error('remote workspace cannot run: the agent preset registry is unavailable')
+			await state.ready
+			let binding = record
+			if (!binding) {
+				if (!REMOTE_PRESET_ID.test(composed)) throw new Error('invalid remote preset identity')
+				const stamp = await readSourceStamp(join(this.home, '.agent-presets', composed))
+				if (!stamp?.profileId || !stamp?.root) throw new Error(`remote preset "${composed}" has no persisted binding`)
+				binding = { presetId: composed, profileId: stamp.profileId, root: stamp.root,
+					label: stamp.profileName, target: stamp.target, anchor: stamp.anchor }
+			}
+			if (composed !== binding.presetId) {
+				if (binding.id || !state.registrations.has(binding.presetId)) {
+					await this.refreshPreset(binding, { state, persisted: !binding.id, baseId: binding.baseId })
+				}
+				await presets.recompose(agent.ctx, binding.presetId)
+			}
+			this.assertRemoteServices(agent, binding)
+			if (composed !== binding.presetId) {
+				agent.session.append('agent-preset/selected', { agentPreset: binding.presetId })
+			}
+		})()
 		this.pending.set(agent.id, work)
-		void work.finally(() => {
-			if (this.pending.get(agent.id) === work) this.pending.delete(agent.id)
-		})
+		const forget = () => { if (this.pending.get(agent.id) === work) this.pending.delete(agent.id) }
+		// Observe cleanup on both outcomes without converting the rejection into
+		// success or leaving a rejected finally() promise behind.
+		void work.then(forget, forget)
 		return work
 	}
 
+	assertRemoteServices(agent, record) {
+		const presets = this.presets
+		if (!presets || presets.composedPreset(agent.ctx) !== record.presetId || typeof presets.serviceFor !== 'function') {
+			throw new Error(`remote workspace cannot bind preset "${record.presetId}"`)
+		}
+		for (const name of REALM_SERVICES) {
+			const service = presets.serviceFor(agent, name)
+			if (!service || service.profileId !== record.profileId || service.root !== record.root) {
+				throw new Error(`remote workspace preset "${record.presetId}" has no matching remote ${name} service`)
+			}
+		}
+	}
+
+	/** Guard later user preset switches/service loss before any model request. */
+	async guardRemoteAgent(agent) {
+		const record = this.byAnchor(agent?.session?.header?.cwd)
+		const composed = this.presets?.composedPreset(agent.ctx)
+		if (record) return this.assertRemoteServices(agent, record)
+		if (!composed?.startsWith(REMOTE_PRESET_PREFIX)) return
+		if (!REMOTE_PRESET_ID.test(composed)) throw new Error('invalid remote preset identity')
+		const stamp = await readSourceStamp(join(this.home, '.agent-presets', composed))
+		if (!stamp?.profileId || !stamp?.root) throw new Error(`remote preset "${composed}" has no persisted binding`)
+		this.assertRemoteServices(agent, { presetId: composed, profileId: stamp.profileId, root: stamp.root })
+	}
+
 	/**
-	 * Wire the service into the host composition.
-	 *
-	 * Both services are optional: a deployment without `workspaceRegistry`
-	 * (headless, ACP) simply has no sidebar to register into, and one without
-	 * `agentPresets` composes no presets at all — in both cases the plugin
-	 * degrades to its standalone `remote_*` tools instead of failing.
-	 * @param {object} ctx - the host plugin context.
+	 * Optional host services leave standalone tools available. Remote sessions
+	 * themselves require a verified binding. The registry injection awaits
+	 * startup registration so persisted ids are ready when the Host is ready.
 	 */
 	attach(ctx) {
 		this.ctx = ctx
-
-		ctx.inject(['workspaceRegistry'], (registryCtx) => {
-			this.registry = registryCtx.workspaceRegistry
-			// Restore rows a previous run created, then heal anything missing.
-			void this.reconcile()
-			registryCtx.effect(() => () => {
-				if (this.registry === registryCtx.workspaceRegistry) this.registry = null
-			})
-		})
-
-		ctx.inject(['agentPresets'], (presetCtx) => {
-			this.presets = presetCtx.agentPresets
-			presetCtx.effect(() => presetCtx.on('agent/created', ({ agent }) => {
-				// Synchronous listener: a throw here would veto the session's
-				// publication, so the whole swap runs on its own promise and
-				// reports failures to the log instead.
-				try {
-					this.composeFor(agent)
-				} catch (error) {
-					this.warn(`remote-ssh: remote workspace hook failed: ${String(error)}`)
-				}
-			}))
-			presetCtx.effect(() => () => {
-				if (this.presets === presetCtx.agentPresets) this.presets = null
-			})
-		})
-
-		// Close the (millisecond) window between publication and the swap: a
-		// prompt sent the instant a session opens waits for its remote world
-		// instead of running one step against the host composition.
+		// DSH 0.2.2 AgentRegistry.announce awaits this serial listener before
+		// ReactLoopFactory releases queued work. pre-step runs AFTER tools.resolve
+		// and prompt assembly and therefore cannot perform the composition swap.
+		ctx.effect(() => ctx.on('agent/created', ({ agent }) => this.composeFor(agent)))
 		ctx.effect(() => ctx.on('agent/pre-step', async (payload, next) => {
-			const work = this.pending.get(payload?.agent?.id)
-			if (work) await work
+			await this.guardRemoteAgent(payload.agent)
 			return next()
 		}))
-
+		ctx.inject(['workspaceRegistry'], (registryCtx) => {
+			const registry = registryCtx.workspaceRegistry
+			this.registry = registry
+			registryCtx.effect(() => () => {
+				if (this.registry === registry) this.registry = null
+			})
+		})
+		const hasPresets = typeof ctx.get === 'function' ? ctx.get('agentPresets') !== undefined : Boolean(ctx.agentPresets)
+		const presetFiber = ctx.inject(['agentPresets'], async (presetCtx) => {
+			this.presets = presetCtx.agentPresets
+			const state = this.stateFor()
+			presetCtx.effect(() => () => this.disposePresets(state))
+			state.ready = this.reconcile({ state })
+			await state.ready
+		})
 		ctx.effect(() => () => {
 			this.pending.clear()
 			this.ctx = null
 		})
+		// Main apply awaits this when a registry is present. Awaiting a child
+		// injection fiber is necessary: the parent's Fiber.await() alone does
+		// not include that child's asynchronous startup work.
+		return hasPresets && typeof presetFiber?.await === 'function'
+			? presetFiber.await() : (this.presetState?.ready || Promise.resolve())
 	}
 
 	/**

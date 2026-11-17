@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Turn a directory on a remote server into a DeepSeek Harness workspace and develop in it like a local one.</strong><br>
-  Straight over SSH: browsing, editing, commands and tests all happen on the remote machine — with nothing installed there.
+  Straight over SSH: browsing, editing, commands and tests all happen remotely — without installing DSH or a remote agent.
 </p>
 
 <p align="center">
@@ -33,7 +33,15 @@ An **SSH remote development plugin** for DeepSeek Harness. Connect to any machin
 
 The experience matches VS Code Remote Development: the UI and the model run locally, the files and commands run remotely.
 
-The remote machine needs **nothing installed** — just an SSH server and an account you can log in with.
+The remote machine does not need DSH or an agent. It needs an SSH server and a login account; standard search tools additionally require remote `rg`.
+
+## Compatibility and prerequisites
+
+This branch targets **DeepSeek Harness 0.2.2-rc.3**. Core interfaces are optional peer dependencies supplied by the host, so installing the plugin does not pull old core packages into a profile. `engines.dsh` restricts the verified runtime; do not bypass the check to assume other releases work.
+
+Full remote workspaces currently target POSIX servers (Linux, macOS, WSL). Standard `glob` / `grep` run **ripgrep (`rg`) on the remote PATH** through SSH subprocesses. Missing remote ripgrep fails explicitly; searches never fall back to the host. Windows connections, SFTP and standalone `remote_dev_*` tools remain available; standard workspace process execution, PTYs, separate control channels and raw-output spill are not implemented.
+
+Cancellation and deadlines close only the operation's SSH channel, preserving the shared connection. Channel closure does not prove remote process-tree termination. Guarded SFTP edits still depend on server metadata precision for external equal-size writes within one timestamp interval. Replacement writes no longer unlink a destination to retry rename.
 
 ## Install
 
@@ -79,7 +87,7 @@ dsh plugin --profile web add dsh-remote-dev
 
 This is the main way to use the plugin. In every session under a remote workspace:
 
-- `read` / `write` / `edit` / `glob` / `grep` operate on remote files over SFTP;
+- `read` / `write` / `edit` operate over SFTP; `glob` / `grep` run remote `rg` through SSH;
 - `bash` runs commands over SSH inside the remote directory;
 - relative paths resolve against the remote directory and `{{cwd}}` shows it, so the local path never leaks into the model's reasoning;
 - persona, AGENTS.md, skills, todos, plan mode and subagents **all remain** — the remote preset is derived from your default preset, not reduced to a handful of tools;
@@ -101,11 +109,11 @@ For one-off remote work without creating a workspace, the model can call these t
 
 | Tool | Purpose |
 | --- | --- |
-| `remote_status` | List profiles, states, platforms and recent errors |
-| `remote_connect` / `remote_disconnect` | Open or close a connection |
-| `remote_exec` | Run a command over SSH |
-| `remote_read` / `remote_write` | Read and write UTF-8 text over SFTP |
-| `remote_list` | Browse a remote directory over SFTP |
+| `remote_dev_status` | List profiles, states, platforms and recent errors |
+| `remote_dev_connect` / `remote_dev_disconnect` | Open or close a connection |
+| `remote_dev_exec` | Run a command over SSH |
+| `remote_dev_read` / `remote_dev_write` | Read and write UTF-8 text over SFTP |
+| `remote_dev_list` | Browse a remote directory over SFTP |
 
 ## FAQ
 
